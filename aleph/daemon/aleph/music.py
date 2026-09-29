@@ -177,6 +177,10 @@ class Music:
         names = {s["albumartist"] for s in self.songs}
         return sorted(names, key=sort_key)
 
+    def coverflow_albums(self):
+        """Albums in iPod Cover Flow order: by artist, then by album."""
+        return sorted(self.albums(), key=lambda kv: (sort_key(kv[0][0]), sort_key(kv[0][1])))
+
     def search(self, query, limit=50):
         """Artists, albums and songs whose names contain the query."""
         if not query.strip():

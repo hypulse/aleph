@@ -10,6 +10,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from aleph.audio import _sink  # noqa: E402
 from aleph.battery import Battery  # noqa: E402
 from aleph.mpd import MPD, filter_expr, quote, records, values  # noqa: E402
+from aleph.music import Music  # noqa: E402
 from aleph.pages import BOOK_EXTS, folder_listing  # noqa: E402
 from aleph.apps import AppSpec, Apps  # noqa: E402
 from aleph.i18n import Translator  # noqa: E402
@@ -129,6 +130,17 @@ class SpawnTest(unittest.IsolatedAsyncioTestCase):
         await asyncio.sleep(0)
         self.assertFalse(task.done())
         task.cancel()
+
+
+class CoverFlowOrderTest(unittest.IsolatedAsyncioTestCase):
+    async def test_albums_by_artist_then_album(self):
+        music = Music(None, State(lambda snap: None), Translator("en"), tempfile.mkdtemp())
+        rows = [("The Owls", "Quiet Hours"), ("Aurora Lane", "Paper Planes"), ("Aurora Lane", "Night Drive"),
+                ("나무", "가을")]
+        music.songs = [{"albumartist": a, "album": b, "genre": "", "file": f"{a}/{b}/1.mp3"} for a, b in rows]
+        order = [key for key, _ in music.coverflow_albums()]
+        self.assertEqual(order, [("Aurora Lane", "Night Drive"), ("Aurora Lane", "Paper Planes"),
+                                 ("The Owls", "Quiet Hours"), ("나무", "가을")])
 
 
 class FolderListingTest(unittest.TestCase):

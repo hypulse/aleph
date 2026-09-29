@@ -8,9 +8,9 @@ replaces the front end with a small shell built around your music.
 
 ## What you get
 
-- **Music** from `/storage/music`: Playlists, Artists, Albums, Songs, Genres, Up Next and
-  Search. Playback carries on in the background, whatever else is open, and a sleep timer
-  in Now Playing stops it for you.
+- **Music** from `/storage/music`: Cover Flow, Playlists, Artists, Albums, Songs, Genres,
+  Up Next and Search. Playback carries on in the background, whatever else is open, and a
+  sleep timer in Now Playing stops it for you.
 - **Search** with an on-screen keyboard that types Hangul as well as Latin; bare initials
   such as ㅎㄱ find 한강.
 - **Radio**: stations from [Radio Browser](https://www.radio-browser.info), with
@@ -28,13 +28,21 @@ replaces the front end with a small shell built around your music.
   and the app in front pauses until the lid opens. With nothing playing the device
   sleeps, and opening the lid wakes it. Videos keep the screen on while they play.
 
+## The look
+
+The last iPod classic, brought forward. Menus split in two: the list on the left, and on
+the right a panel where album art drifts slowly across, or the song playing, or a colour and
+a glyph for the section you are on. Cover Flow turns the albums in 3D over a black floor
+with their reflections; press A and the album flips over to show its songs. Artwork has
+softly rounded corners, and type is set in Pretendard.
+
 ## The rules
 
 Every screen is a list, and every list works the same way.
 
 | Button | What it does |
 | --- | --- |
-| D-pad | Move. In long lists ← and → jump to the previous or next letter |
+| D-pad | Move. In long lists ← and → jump to the previous or next letter; in Cover Flow they turn the albums |
 | A | Open or choose |
 | B | Back |
 | X | Options for the selected item |

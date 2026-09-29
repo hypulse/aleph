@@ -26,17 +26,32 @@ static void items_free(Page *p)
         SDL_free(it->value);
         SDL_free(it->art);
         SDL_free(it->icon);
+        SDL_free(it->preview);
+        SDL_free(it->link);
     }
     SDL_free(p->items);
     p->items = NULL;
     p->count = 0;
 }
 
+static void art_free(Page *p)
+{
+    for (int i = 0; i < p->art_count; i++)
+        SDL_free(p->art[i]);
+    SDL_free(p->art);
+    p->art = NULL;
+    p->art_count = 0;
+}
+
 void page_free(Page *p)
 {
     if (!p)
         return;
+    page_free(p->card);
     items_free(p);
+    art_free(p);
+    SDL_free(p->shown);
+    SDL_free(p->prev_shown);
     SDL_free(p->path);
     SDL_free(p->title);
     SDL_free(p->empty_title);
@@ -60,13 +75,15 @@ static bool page_alive(Page *p)
     if (p == app.overlay || p == app.leaving)
         return true;
     for (int i = 0; i < app.depth; i++)
-        if (app.stack[i] == p)
+        if (app.stack[i] == p || app.stack[i]->card == p)
             return true;
     return false;
 }
 
 static int viewport_h(Page *p)
 {
+    if (p->viewport > 0)
+        return p->viewport;
     if (p->sheet) {
         int rows = list_height(p);
         return (rows > 330 ? 330 : rows) + 2;
@@ -147,8 +164,23 @@ static void page_fill(Page *p, cJSON *pg)
              : !strcmp(style, "nowplaying") ? STYLE_NOWPLAYING
              : !strcmp(style, "slider")     ? STYLE_SLIDER
              : !strcmp(style, "about")      ? STYLE_ABOUT
+             : !strcmp(style, "coverflow")  ? STYLE_COVERFLOW
                                             : STYLE_LIST;
     SDL_free(style);
+    char *layout = json_str(pg, "layout");
+    p->split = layout && !strcmp(layout, "split");
+    SDL_free(layout);
+    art_free(p);
+    cJSON *art = cJSON_GetObjectItemCaseSensitive(pg, "art"), *a;
+    int na = cJSON_GetArraySize(art);
+    if (na > 0) {
+        p->art = SDL_calloc((size_t)na, sizeof(char *));
+        cJSON_ArrayForEach(a, art)
+        {
+            if (cJSON_IsString(a))
+                p->art[p->art_count++] = xstrdup(a->valuestring);
+        }
+    }
     char *rows = json_str(pg, "rows");
     p->tall = rows && !strcmp(rows, "tall");
     SDL_free(rows);
@@ -184,6 +216,8 @@ static void page_fill(Page *p, cJSON *pg)
         d->value = json_str(it, "value");
         d->art = json_str(it, "art");
         d->icon = json_str(it, "icon");
+        d->preview = json_str(it, "preview");
+        d->link = json_str(it, "link");
         char *acc = json_str(it, "accessory");
         d->accessory = accessory_of(acc);
         SDL_free(acc);
@@ -218,6 +252,8 @@ static void page_fill(Page *p, cJSON *pg)
     while (sel < p->count - 1 && !selectable(p, sel))
         sel++;
     p->sel = sel;
+    if (first && p->style == STYLE_COVERFLOW)
+        p->cf_pos = (float)sel;
     ensure_visible(p, false);
     if (first && p->sheet && p == top()) {
         app.depth--;
@@ -276,6 +312,10 @@ void nav_push(const char *path, const char *title)
     if (app.depth >= (int)SDL_arraysize(app.stack))
         return;
     Page *prev = top();
+    if (prev && prev->card) {
+        page_free(prev->card);
+        prev->card = NULL;
+    }
     Page *p = page_new(path, title);
     if (!strcmp(path, "/nowplaying")) {
         p->style = STYLE_NOWPLAYING;
@@ -620,6 +660,51 @@ static void slider_key(Page *p, const char *key)
     ipc_request(req, NULL, NULL);
 }
 
+/* Cover Flow: left and right glide through albums, L2/R2 skip five, A flips the album
+ * over to its songs and B flips it back. */
+static void open_card(Page *p)
+{
+    Item *it = &p->items[p->sel];
+    if (!it->link) {
+        activate(p);
+        return;
+    }
+    page_free(p->card);
+    p->card = page_new(it->link, it->title);
+    p->card->viewport = CARD_LIST_H;
+    page_request(p->card);
+    p->flip_at = SDL_GetTicks();
+    p->closing = false;
+}
+
+static void coverflow_key(Page *p, const char *key, bool repeat)
+{
+    Page *c = p->card;
+    if (c) {
+        if (p->closing)
+            return;
+        if (!strcmp(key, "back")) {
+            if (!repeat) {
+                p->closing = true;
+                p->flip_at = SDL_GetTicks();
+            }
+        } else if (c->loaded) {
+            list_key(c, key, repeat);
+        }
+        return;
+    }
+    int step = !strcmp(key, "left") ? -1 : !strcmp(key, "right") ? 1
+             : !strcmp(key, "pageup") ? -5 : !strcmp(key, "pagedown") ? 5 : 0;
+    if (step && p->count) {
+        int s = p->sel + step;
+        p->sel = s < 0 ? 0 : s >= p->count ? p->count - 1 : s;
+    } else if (!strcmp(key, "confirm") && !repeat && p->count) {
+        open_card(p);
+    } else if (!strcmp(key, "back") && !repeat) {
+        nav_pop();
+    }
+}
+
 static void nowplaying_key(const char *key, bool repeat)
 {
     if (!strcmp(key, "confirm") && !repeat)
@@ -772,6 +857,8 @@ void nav_key(const char *key, bool repeat)
             nowplaying_key(key, repeat);
         else if (p->style == STYLE_SLIDER)
             slider_key(p, key);
+        else if (p->style == STYLE_COVERFLOW)
+            coverflow_key(p, key, repeat);
         else if (p->loaded)
             list_key(p, key, repeat);
         else if (!strcmp(key, "back"))

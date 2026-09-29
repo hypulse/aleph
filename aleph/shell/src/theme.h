@@ -11,6 +11,18 @@
 #define HEADER_H 34
 #define PAD_X 22
 #define ART_THUMB 56
+#define ART_RADIUS 7
+
+/* Split menus keep the list on the left and an artwork panel on the right, as the last
+ * iPod classic did. */
+#define SPLIT_LIST_W 336
+
+/* Cover Flow, and the card an album flips over to. */
+#define CF_SIZE 232
+#define CARD_W 336
+#define CARD_H 360
+#define CARD_HEAD 66
+#define CARD_LIST_H (CARD_H - CARD_HEAD - 12)
 
 #define FONT_BAR 22
 #define FONT_ROW 25

@@ -133,6 +133,69 @@ def empty_icons(P):
     glyph("game", game)
 
 
+def glyphs(P):
+    """128 pt white glyphs for the artwork panel beside split menus."""
+    def glyph(name, draw):
+        img, d = canvas(128, 128)
+        draw(d)
+        done(img, 128, 128, P("glyph-" + name))
+
+    glyph("music", lambda d: note(d, 24, 22, 2.0))
+
+    def radio(d):
+        ellipse(d, 56, 62, 72, 78)
+        for r in (24, 40, 56):
+            arc(d, 64, 70, r, 215, 325, 7)
+            arc(d, 64, 70, r, 35, 145, 7)
+    glyph("radio", radio)
+
+    def video(d):
+        rrect(d, 18, 32, 110, 96, 14, fill=False, width=7)
+        poly(d, [(54, 48), (54, 80), (84, 64)])
+    glyph("video", video)
+
+    def book(d):
+        poly(d, [(20, 38), (60, 45), (60, 96), (20, 89)])
+        poly(d, [(68, 45), (108, 38), (108, 89), (68, 96)])
+    glyph("book", book)
+
+    def game(d):
+        rrect(d, 14, 40, 114, 92, 26)
+        d.rectangle([s(29), s(62), s(53), s(70)], fill=CLEAR)
+        d.rectangle([s(37), s(54), s(45), s(78)], fill=CLEAR)
+        d.ellipse([s(76), s(66), s(88), s(78)], fill=CLEAR)
+        d.ellipse([s(90), s(54), s(102), s(66)], fill=CLEAR)
+    glyph("game", game)
+
+    def settings(d):
+        for i in range(8):
+            a = math.radians(i * 45)
+            c, n = math.cos(a), math.sin(a)
+            pts = []
+            for r, w in ((24, 9), (46, 7), (46, -7), (24, -9)):
+                pts.append((64 + r * c - w * n, 64 + r * n + w * c))
+            poly(d, pts)
+        ellipse(d, 30, 30, 98, 98)
+        d.ellipse([s(49), s(49), s(79), s(79)], fill=CLEAR)
+    glyph("settings", settings)
+
+    def playlist(d):
+        for y in (36, 58, 80):
+            line(d, [(20, y), (66, y)], 7)
+        note(d, 70, 52, 1.0)
+    glyph("playlist", playlist)
+
+    def genre(d):
+        for x, y in ((24, 24), (70, 24), (24, 70), (70, 70)):
+            rrect(d, x, y, x + 34, y + 34, 9)
+    glyph("genre", genre)
+
+    def search(d):
+        ellipse(d, 28, 28, 84, 84, fill=False, width=9)
+        line(d, [(78, 78), (102, 102)], 12)
+    glyph("search", search)
+
+
 def build(out):
     icons = os.path.join(out, "icons")
     os.makedirs(icons, exist_ok=True)
@@ -271,6 +334,7 @@ def build(out):
         done(img, size, size, P(name))
 
     empty_icons(P)
+    glyphs(P)
 
     img, d = canvas(80, 80)
     speaker_body(d, 10, 18, 1.1)

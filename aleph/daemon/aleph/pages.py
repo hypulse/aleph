@@ -2,6 +2,7 @@ import asyncio
 import logging
 import os
 import secrets
+import zlib
 
 from .apps import installed_ports, port_spec
 from .radio import RadioError
@@ -131,27 +132,38 @@ class Pages:
 
     # root --------------------------------------------------------------------
 
+    def _art_pool(self, path, limit=16):
+        """Album covers for the artwork panel beside split menus, in a stable shuffled order."""
+        m = self.app.music
+        albums = m.albums()
+        pool = [a for a in (m._art_for(f) for _, f in albums) if a]
+        if len(pool) < min(limit, len(albums)):
+            self._prefetch_art(path, [f for _, f in albums[:limit * 2]])
+        pool.sort(key=lambda p: zlib.crc32(os.path.basename(p).encode()))
+        return pool[:limit]
+
     async def _page_root(self, path, rest):
         t = self.t
         items = [
-            item("music", t("music")),
-            item("radio", t("radio")),
-            item("videos", t("videos")),
-            item("books", t("books")),
-            item("games", t("games")),
-            item("settings", t("settings")),
-            item("shuffle", t("shuffle_songs"), "none"),
+            item("music", t("music"), preview="art"),
+            item("radio", t("radio"), preview="radio"),
+            item("videos", t("videos"), preview="video"),
+            item("books", t("books"), preview="book"),
+            item("games", t("games"), preview="game"),
+            item("settings", t("settings"), preview="settings"),
+            item("shuffle", t("shuffle_songs"), "none", preview="art"),
         ]
         player = self.app.state.get("player")
         if player["count"] or player["state"] != "stop":
-            items.append(item("nowplaying", t("now_playing")))
+            items.append(item("nowplaying", t("now_playing"), preview="now"))
         apps = self.app.state.get("apps")
         if apps:
             items.append(header(t("open_apps")))
             for a in apps:
-                items.append(item(f"app:{a['key']}", a["title"], "none",
+                kind = {"koreader": "book", "video": "video"}.get(a["key"], "game")
+                items.append(item(f"app:{a['key']}", a["title"], "none", preview=kind,
                                   value=t("paused_app") if a["frozen"] else None))
-        return page("/", "aleph", items, live=True)
+        return page("/", "aleph", items, live=True, layout="split", art=self._art_pool(path))
 
     async def _do_root(self, path, rest, key):
         if key == "shuffle":
@@ -209,12 +221,25 @@ class Pages:
         m = self.app.music
         playing = self.app.state.get("player").get("file")
         if not rest:
-            items = [item("playlists", t("playlists")), item("artists", t("artists")),
-                     item("albums", t("albums")), item("songs", t("songs")),
-                     item("genres", t("genres")), item("queue", t("up_next")),
-                     item("search", t("search"))]
-            return page(path, t("music"), items)
+            items = [item("coverflow", t("cover_flow"), preview="art"),
+                     item("playlists", t("playlists"), preview="playlist"),
+                     item("artists", t("artists"), preview="art"),
+                     item("albums", t("albums"), preview="art"),
+                     item("songs", t("songs"), preview="art"),
+                     item("genres", t("genres"), preview="genre"),
+                     item("queue", t("up_next"), preview="now"),
+                     item("search", t("search"), preview="search")]
+            return page(path, t("music"), items, layout="split", art=self._art_pool(path))
         kind = rest[0]
+        if kind == "coverflow":
+            albums = m.coverflow_albums()
+            items = [item(f"alb{i}", album or t("unknown_album"), "none",
+                          subtitle=artist or t("unknown_artist"), art=self._album_art(file),
+                          link="/music/album/" + enc(artist, album))
+                     for i, ((artist, album), file) in enumerate(albums)]
+            self._prefetch_art(path, [f for _, f in albums])
+            return page(path, t("cover_flow"), items, style="coverflow", live=True,
+                        empty=self._empty_music())
         if kind == "search" and len(rest) >= 2:
             artists, albums, songs = m.search(rest[1])
             items = []
@@ -280,6 +305,9 @@ class Pages:
                                   "token": self._token(self._music_search)}}
             return {"push": f"/music/{key}"}
         kind = rest[0]
+        if kind == "coverflow":
+            (artist, album), _ = m.coverflow_albums()[int(key[3:])]
+            return {"push": "/music/album/" + enc(artist, album)}
         if kind == "search" and key.startswith("a:"):
             return {"push": "/music/artist/" + enc(key[2:])}
         if kind == "search" and key.startswith("alb") and len(rest) >= 2:

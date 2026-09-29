@@ -9,23 +9,23 @@
 #include "theme.h"
 
 enum { ACC_NONE, ACC_CHEVRON, ACC_CHECK, ACC_SWITCH, ACC_SPINNER, ACC_PLAYING, ACC_STAR };
-enum { STYLE_LIST, STYLE_NOWPLAYING, STYLE_SLIDER, STYLE_ABOUT };
+enum { STYLE_LIST, STYLE_NOWPLAYING, STYLE_SLIDER, STYLE_ABOUT, STYLE_COVERFLOW };
 enum { FONT_REGULAR, FONT_MEDIUM, FONT_SEMIBOLD, FONT_BOLD, FONT_WEIGHTS };
 
 typedef struct {
-    char *key, *title, *subtitle, *value, *art, *icon;
+    char *key, *title, *subtitle, *value, *art, *icon, *preview, *link;
     int accessory;
     int signal;
     bool on, header, lock, spinner;
     char letter[8];
 } Item;
 
-typedef struct {
+typedef struct Page {
     char *path, *title;
     int style;
     Item *items;
     int count;
-    bool loaded, loading_shown, tall, live, index, sheet;
+    bool loaded, loading_shown, tall, live, index, sheet, split;
     char *empty_title, *empty_text, *empty_icon;
     int value, min, max, step;
     int sel;
@@ -33,6 +33,18 @@ typedef struct {
     Uint32 scroll_at;
     Uint32 opened_at, marquee_at;
     int req;
+    int viewport;
+    /* split menus: the artwork panel and what it shows */
+    char **art;
+    int art_count;
+    char *shown, *prev_shown;
+    Uint32 shown_at;
+    /* cover flow: the position that glides after the selection, and the flipped album */
+    float cf_pos;
+    Uint32 cf_at;
+    struct Page *card;
+    Uint32 flip_at;
+    bool closing;
 } Page;
 
 typedef struct {
@@ -162,9 +174,14 @@ SDL_Texture *icon(const char *name);
 void draw_icon(const char *name, int x, int y, Rgba tint);
 void draw_icon_rot(const char *name, int x, int y, double angle, Rgba tint);
 SDL_Texture *image(const char *path, int size);
+SDL_Texture *image_r(const char *path, int size, int radius);
+SDL_Texture *image_or(const char *path, const char *fallback, int size, int radius);
 void draw_image(const char *path, const char *fallback, int x, int y, int size, int radius);
+void fill_gradient_h(int x, int y, int w, int h, Rgba left, Rgba right);
+void draw_strips(SDL_Texture *t, const SDL_FPoint *top, const SDL_FPoint *bottom, const float *u, int n,
+                 float v0, float v1, SDL_Color c0, SDL_Color c1);
 void draw_spinner(int cx, int cy, Rgba tint);
-void draw_battery(int x, int y, int percent, bool charging);
+void draw_battery(int x, int y, int percent, bool charging, Rgba outline);
 bool save_screenshot(const char *path);
 
 /* views.c */

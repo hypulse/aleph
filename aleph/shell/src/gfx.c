@@ -20,7 +20,7 @@ typedef struct {
 
 typedef struct {
     char *path;
-    int size;
+    int size, radius;
     SDL_Texture *tex;
     Uint32 used;
 } ImageEntry;
@@ -113,6 +113,41 @@ void fill_gradient(int x, int y, int w, int h, Rgba top, Rgba bottom)
     };
     int idx[6] = {0, 1, 2, 0, 2, 3};
     SDL_RenderGeometry(app.renderer, NULL, v, 4, idx, 6);
+}
+
+void fill_gradient_h(int x, int y, int w, int h, Rgba left, Rgba right)
+{
+    SDL_Color a = {left.r, left.g, left.b, left.a}, b = {right.r, right.g, right.b, right.a};
+    SDL_Vertex v[4] = {
+        {{(float)x, (float)y}, a, {0, 0}},
+        {{(float)(x + w), (float)y}, b, {0, 0}},
+        {{(float)(x + w), (float)(y + h)}, b, {0, 0}},
+        {{(float)x, (float)(y + h)}, a, {0, 0}},
+    };
+    int idx[6] = {0, 1, 2, 0, 2, 3};
+    SDL_RenderGeometry(app.renderer, NULL, v, 4, idx, 6);
+}
+
+/* A texture over a strip mesh: column i runs from top[i] to bottom[i] with texture
+ * column u[i]. Many narrow strips keep perspective honest without a 3D pipeline. */
+void draw_strips(SDL_Texture *t, const SDL_FPoint *top, const SDL_FPoint *bottom, const float *u, int n,
+                 float v0, float v1, SDL_Color c0, SDL_Color c1)
+{
+    SDL_Vertex v[2 * 33];
+    int idx[6 * 32], k = 0;
+    if (n > 33)
+        n = 33;
+    for (int i = 0; i < n; i++) {
+        v[2 * i] = (SDL_Vertex){top[i], c0, {u[i], v0}};
+        v[2 * i + 1] = (SDL_Vertex){bottom[i], c1, {u[i], v1}};
+    }
+    for (int i = 0; i + 1 < n; i++) {
+        int a = 2 * i, b = 2 * i + 1, c = 2 * i + 2, d = 2 * i + 3;
+        int tri[6] = {a, c, d, a, d, b};
+        for (int j = 0; j < 6; j++)
+            idx[k++] = tri[j];
+    }
+    SDL_RenderGeometry(app.renderer, t, v, 2 * n, idx, k);
 }
 
 /* White disc (t == 0) or ring of thickness t, anti-aliased by pixel coverage. */
@@ -440,8 +475,9 @@ void draw_icon_rot(const char *name, int x, int y, double angle, Rgba c)
     SDL_RenderCopyEx(app.renderer, t, NULL, &(SDL_Rect){x, y, w, h}, angle, NULL, SDL_FLIP_NONE);
 }
 
-/* Center-crop to a square and box-filter down; keeps covers sharp without mip-maps. */
-static SDL_Surface *square_thumb(SDL_Surface *src, int size)
+/* Center-crop to a square and box-filter down; keeps covers sharp without mip-maps.
+ * A radius rounds the corners with anti-aliased alpha. */
+static SDL_Surface *square_thumb(SDL_Surface *src, int size, int radius)
 {
     SDL_Surface *s = SDL_ConvertSurfaceFormat(src, SDL_PIXELFORMAT_ARGB8888, 0);
     if (!s)
@@ -470,8 +506,16 @@ static SDL_Surface *square_thumb(SDL_Surface *src, int size)
                     acc[3] += p & 255;
                 }
             }
+            Uint32 alpha = acc[0] / n;
+            if (radius > 0) {
+                float cx = x < radius ? radius : x >= size - radius ? size - radius : x + 0.5f;
+                float cy = y < radius ? radius : y >= size - radius ? size - radius : y + 0.5f;
+                float dx = x + 0.5f - cx, dy = y + 0.5f - cy;
+                float cover = fminf(fmaxf(radius - sqrtf(dx * dx + dy * dy) + 0.5f, 0), 1);
+                alpha = (Uint32)(alpha * cover + 0.5f);
+            }
             dst[y * (out->pitch / 4) + x] =
-                ((acc[0] / n) << 24) | ((acc[1] / n) << 16) | ((acc[2] / n) << 8) | (acc[3] / n);
+                (alpha << 24) | ((acc[1] / n) << 16) | ((acc[2] / n) << 8) | (acc[3] / n);
         }
     }
     SDL_FreeSurface(s);
@@ -480,10 +524,16 @@ static SDL_Surface *square_thumb(SDL_Surface *src, int size)
 
 SDL_Texture *image(const char *path, int size)
 {
+    return image_r(path, size, 0);
+}
+
+SDL_Texture *image_r(const char *path, int size, int radius)
+{
     if (!path || !*path)
         return NULL;
     for (int i = 0; i < IMAGE_SLOTS; i++) {
-        if (images[i].path && images[i].size == size && !strcmp(images[i].path, path)) {
+        if (images[i].path && images[i].size == size && images[i].radius == radius &&
+            !strcmp(images[i].path, path)) {
             images[i].used = frame;
             return images[i].tex;
         }
@@ -495,11 +545,13 @@ SDL_Texture *image(const char *path, int size)
     SDL_Surface *raw = IMG_Load(path);
     SDL_Texture *tex = NULL;
     if (raw) {
-        SDL_Surface *thumb = square_thumb(raw, size);
+        SDL_Surface *thumb = square_thumb(raw, size, radius);
         SDL_FreeSurface(raw);
         if (thumb) {
             tex = SDL_CreateTextureFromSurface(app.renderer, thumb);
             SDL_FreeSurface(thumb);
+            if (tex)
+                SDL_SetTextureBlendMode(tex, SDL_BLENDMODE_BLEND);
         }
     }
     if (slot->path) {
@@ -507,19 +559,24 @@ SDL_Texture *image(const char *path, int size)
         if (slot->tex)
             SDL_DestroyTexture(slot->tex);
     }
-    *slot = (ImageEntry){SDL_strdup(path), size, tex, frame};
+    *slot = (ImageEntry){SDL_strdup(path), size, radius, tex, frame};
     return tex;
+}
+
+SDL_Texture *image_or(const char *path, const char *fallback, int size, int radius)
+{
+    SDL_Texture *t = image_r(path, size, radius);
+    if (!t && fallback) {
+        char p[768];
+        snprintf(p, sizeof(p), "%s/%s.png", app.asset_dir, fallback);
+        t = image_r(p, size, radius);
+    }
+    return t;
 }
 
 void draw_image(const char *path, const char *fallback, int x, int y, int size, int radius)
 {
-    (void)radius;
-    SDL_Texture *t = image(path, size);
-    if (!t && fallback) {
-        char p[768];
-        snprintf(p, sizeof(p), "%s/%s.png", app.asset_dir, fallback);
-        t = image(p, size);
-    }
+    SDL_Texture *t = image_or(path, fallback, size, radius);
     if (t) {
         SDL_SetTextureColorMod(t, 255, 255, 255);
         SDL_SetTextureAlphaMod(t, 255);
@@ -538,9 +595,9 @@ void draw_spinner(int cx, int cy, Rgba c)
     draw_icon_rot("spinner", cx - w / 2, cy - h / 2, angle, c);
 }
 
-void draw_battery(int x, int y, int percent, bool charging)
+void draw_battery(int x, int y, int percent, bool charging, Rgba outline)
 {
-    draw_icon("battery", x, y, RGB(60, 60, 67));
+    draw_icon("battery", x, y, outline);
     int inner = (int)(26 * (percent < 0 ? 0 : percent > 100 ? 100 : percent) / 100.0 + 0.5);
     Rgba fill = percent <= 20 && !charging ? C_RED : C_GREEN;
     if (inner > 0)

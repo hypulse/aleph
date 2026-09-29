@@ -60,6 +60,7 @@ STRINGS = {
     "removed_favorite": ("즐겨찾기에서 삭제됨", "Removed from Favorites"),
     "stream_failed": ("방송에 연결할 수 없어요", "Couldn’t Connect to the Station"),
     "search_music_prompt": ("아티스트, 앨범, 노래", "Artists, albums, songs"),
+    "cover_flow": ("커버 플로우", "Cover Flow"),
     "sleep_timer": ("잠자기 타이머", "Sleep Timer"),
     "sleep_timer_set": ("{n}분 뒤에 음악을 멈춰요", "Music stops in {n} min"),
     "one_hour": ("1시간", "1 hour"),
