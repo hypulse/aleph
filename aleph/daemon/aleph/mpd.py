@@ -136,6 +136,9 @@ class MPD:
                     if attempt:
                         raise MPDError(str(e)) from e
 
+    def close(self):
+        self._conn.close()
+
     async def call(self, name, *args):
         return await self._with_connection(lambda c: c.command(name, *args))
 

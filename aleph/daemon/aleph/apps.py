@@ -17,23 +17,29 @@ def _first_existing(*paths):
 
 
 class AppSpec:
-    def __init__(self, key, title_key, argv, needs=None, pauses_music=False):
+    def __init__(self, key, title_key, argv, needs=None, pauses_music=False, env=None):
         self.key = key
         self.title_key = title_key
         self.argv = argv
         self.needs = needs
         self.pauses_music = pauses_music
+        self.env = env or {}
 
     def available(self):
         return self.needs is None or _first_existing(*self.needs) is not None
 
 
+PORTS_DIR = "/storage/roms/ports"
+
+
 def catalog(data_dir):
-    koreader = _first_existing("/storage/koreader/koreader.sh", "/usr/lib/koreader/koreader.sh",
-                               "/storage/roms/ports/koreader/koreader.sh")
+    koreader = _first_existing("/usr/bin/koreader", "/storage/koreader/koreader.sh")
     portmaster = _first_existing("/usr/bin/start_portmaster.sh")
     return {
-        "koreader": AppSpec("koreader", "books", [koreader] if koreader else None, needs=[koreader]),
+        "koreader": AppSpec("koreader", "books", [koreader, "/storage/books"] if koreader else None,
+                            needs=[koreader],
+                            env={"SDL_FULLSCREEN": "1", "EMULATE_READER_W": "640",
+                                 "EMULATE_READER_H": "480"}),
         "portmaster": AppSpec("portmaster", "PortMaster", [portmaster] if portmaster else None,
                               needs=[portmaster]),
         "retroarch": AppSpec("retroarch", "RetroArch", ["retroarch"], needs=["retroarch"],
@@ -79,7 +85,7 @@ class Apps:
         argv = list(spec.argv) + list(extra_args)
         if argv[0] == "mpv":
             argv.insert(1, f"--wayland-app-id={app_id}")
-        env = {**self.env, "SDL_VIDEO_WAYLAND_WMCLASS": app_id, "SDL_VIDEO_X11_WMCLASS": app_id}
+        env = {**self.env, **spec.env, "SDL_VIDEO_WAYLAND_WMCLASS": app_id, "SDL_VIDEO_X11_WMCLASS": app_id}
         self.running[spec.key] = {"title": title, "unit": unit, "workspace": workspace,
                                   "frozen": False, "app_id": app_id}
         if self.sim:
@@ -175,3 +181,17 @@ class Apps:
             await run("swaymsg", "workspace", "number", str(SHELL_WORKSPACE))
             self.events.foreground_changed()
         self._publish()
+
+
+def installed_ports():
+    """Launch scripts PortMaster installed, as (title, path)."""
+    try:
+        names = sorted(os.listdir(PORTS_DIR), key=str.casefold)
+    except OSError:
+        return []
+    return [(os.path.splitext(n)[0], os.path.join(PORTS_DIR, n)) for n in names
+            if n.endswith(".sh") and n.lower() != "portmaster.sh"]
+
+
+def port_spec(title, path):
+    return AppSpec("port", title, ["bash", path], pauses_music=True)

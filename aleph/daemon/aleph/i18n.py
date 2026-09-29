@@ -63,10 +63,11 @@ STRINGS = {
     "no_videos_title": ("비디오가 없어요", "No Videos"),
     "no_videos_text": ("videos 폴더에 동영상을 넣어 주세요.", "Copy movies into the videos folder."),
     "no_books_title": ("KOReader가 없어요", "KOReader Not Installed"),
-    "no_books_text": ("PortMaster에서 KOReader를 설치해 주세요.", "Install KOReader from PortMaster."),
+    "no_books_text": ("이 이미지에는 KOReader가 들어 있지 않아요.", "This image does not include KOReader."),
     "no_games_title": ("게임 앱이 없어요", "No Games"),
-    "no_games_text": ("PortMaster나 RetroArch를 설치해 주세요.", "Install PortMaster or RetroArch."),
+    "no_games_text": ("PortMaster에서 게임을 설치해 주세요.", "Install games from PortMaster."),
     "opening": ("여는 중…", "Opening…"),
+    "ports": ("설치한 게임", "Installed Games"),
     "close_app": ("닫기", "Close"),
 
     "wifi": ("Wi-Fi", "Wi-Fi"),

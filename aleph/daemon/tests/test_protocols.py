@@ -85,10 +85,10 @@ class MpdClientTest(unittest.IsolatedAsyncioTestCase):
 
     async def asyncTearDown(self):
         self.server.close()
-        await self.server.wait_closed()
 
     async def test_status_and_errors(self):
         mpd = MPD(self.sock)
+        self.addCleanup(mpd.close)
         status = dict(await mpd.call("status"))
         self.assertEqual(status["elapsed"], "12.5")
         with self.assertRaises(Exception):
@@ -96,7 +96,9 @@ class MpdClientTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(dict(await mpd.call("status"))["song"], "2")
 
     async def test_binary_picture_in_chunks(self):
-        data, mime = await MPD(self.sock).picture("x.flac")
+        mpd = MPD(self.sock)
+        self.addCleanup(mpd.close)
+        data, mime = await mpd.picture("x.flac")
         self.assertEqual(data, self.fake.picture)
         self.assertEqual(mime, "image/png")
 

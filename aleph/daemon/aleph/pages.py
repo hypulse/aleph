@@ -3,6 +3,7 @@ import logging
 import os
 import secrets
 
+from .apps import installed_ports, port_spec
 from .radio import RadioError
 from .system import human_size
 from .util import enc, spawn, split_path
@@ -471,10 +472,19 @@ class Pages:
     async def _page_games(self, path, rest):
         items = [item(key, spec.title_key, "none") for key, spec in self.app.catalog.items()
                  if key in ("portmaster", "retroarch") and spec.available()]
-        return page(path, self.t("games"), items,
+        ports = installed_ports()
+        if ports:
+            items.append(header(self.t("ports")))
+            items += [item("port:" + p, title, "none") for title, p in ports]
+        return page(path, self.t("games"), items, live=True,
                     empty={"title": self.t("no_games_title"), "text": self.t("no_games_text")})
 
     async def _do_games(self, path, rest, key):
+        if key.startswith("port:"):
+            script = key[5:]
+            title = os.path.splitext(os.path.basename(script))[0]
+            await self.app.launch(port_spec(title, script), title)
+            return None
         spec = self.app.catalog.get(key)
         if spec:
             await self.app.launch(spec, spec.title_key)
