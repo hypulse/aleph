@@ -11,12 +11,21 @@ replaces the front end with a small shell built around your music.
 - **Music** from `/storage/music`: Cover Flow, Playlists, Artists, Albums, Songs, Genres,
   Up Next and Search. Playback carries on in the background, whatever else is open, and a
   sleep timer in Now Playing stops it for you.
+- **Lyrics** in Now Playing: timed lyrics follow the line being sung, plain ones scroll.
+  They come from an `.lrc` or `.txt` file beside the song, or from the song's own tags.
 - **Search** with an on-screen keyboard that types Hangul as well as Latin; bare initials
   such as ㅎㄱ find 한강.
 - **Radio**: stations from [Radio Browser](https://www.radio-browser.info), with
   Favorites, Top Stations, Korea, By Country and Search.
-- **Videos** from `/storage/videos`, played by mpv. It remembers where you stopped.
-- **Books** from `/storage/books`, opened in KOReader.
+- **Videos** from `/storage/videos`, played by mpv: MP4, MKV, AVI, WebM, MOV and the rest.
+  Subtitles beside the file (SRT, SMI, ASS, VTT) or inside it turn on by themselves, Korean
+  first, and older Korean subtitle files read correctly. It remembers where you stopped.
+- **Books** from `/storage/books`, opened in KOReader. **Word Wise** writes a short meaning
+  above harder English words, in Korean or in plain English: press X on a book to choose.
+  The page you are on follows you when you turn it on or off.
+- **News**: over Wi-Fi, the day's articles from a few news feeds become one book, and the
+  last week stays. Change the feeds in `/storage/.config/aleph/news-feeds.txt`, one
+  `Name | URL` per line.
 - **Games**: PortMaster and the ports it installs.
 - **Bluetooth** headphones connect from one list, in Settings or the Control Center. If
   they drop, the music pauses instead of carrying on through the speaker.
@@ -55,13 +64,13 @@ Every screen is a list, and every list works the same way.
 | Volume | Volume, always |
 | Power | Turn the screen off or on; hold for Sleep, Restart and Shut Down |
 
-In Now Playing, ← and → skip 10 seconds and ↑ and ↓ change the volume.
+In Now Playing, ← and → skip 10 seconds, ↑ and ↓ change the volume, and Y shows the lyrics.
 
 Apps get the buttons while they are in front, except Home and Volume. They follow the
 same idea:
 
 - **KOReader**: A selects, B leaves the book (the page is saved), X or Start opens the
-  menu, and the shoulders and triggers turn pages.
+  menu, and ← and →, the shoulders and the triggers turn pages.
 - **mpv**: A pauses, B leaves and remembers the spot, ← and → skip 10 seconds, ↑ and ↓
   skip a minute, and L1 and R1 move between chapters.
 
@@ -118,13 +127,25 @@ docker run --rm -v "$PWD":/src -v "$PWD/shots":/out -w /src aleph-dev \
     aleph/tools/sim/run.sh /src/aleph/tools/sim/tour.txt /out
 ```
 
+The desk runs the same system with the real apps under a headless sway, mpv and KOReader
+included, and records it: the storyboard in `aleph/tools/desk/demo.py` plays music with
+lyrics, videos in four formats with their subtitles, books with Word Wise and the news,
+switching between them.
+
+```sh
+docker build -t aleph-desk aleph/tools/desk
+docker run --rm -v "$PWD":/src -v "$PWD/books":/books -v "$PWD/out":/out -w /src aleph-desk \
+    aleph/tools/desk/run.sh /books /out
+```
+
 Daemon tests: `python3 -m unittest discover -s aleph/daemon/tests`.
 
 ## Status
 
-This is a demo. The shell, pages and the MPD client are exercised in the simulator. The
-parts that talk to the hardware, BlueZ, NetworkManager, PipeWire, evdev, sway and suspend,
-still need a pass on the device.
+This is a demo. The shell, pages and the MPD client are exercised in the simulator, and
+mpv, KOReader and multitasking on the desk. The parts that talk to the hardware, BlueZ,
+NetworkManager, PipeWire, evdev, systemd freezing and suspend, still need a pass on the
+device.
 
 ## Credits
 
@@ -132,4 +153,5 @@ aleph is built on [ROCKNIX](https://github.com/ROCKNIX/distribution) and uses
 [MPD](https://www.musicpd.org), [KOReader](https://koreader.rocks),
 [PortMaster](https://portmaster.games), [mpv](https://mpv.io),
 [cJSON](https://github.com/DaveGamble/cJSON) and the
-[Pretendard](https://github.com/orioncactus/pretendard) typeface.
+[Pretendard](https://github.com/orioncactus/pretendard) typeface. Word Wise hints come from
+the Korean Wiktionary, Princeton WordNet and wordfreq; see `data/wordwise`.

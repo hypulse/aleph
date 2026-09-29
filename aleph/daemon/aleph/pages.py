@@ -8,7 +8,7 @@ import zlib
 
 from . import news
 from .apps import installed_ports, port_spec
-from .ebook import Glossary, annotate_epub
+from .ebook import Glossary, annotate_epub, follow_position, settle_position
 from .radio import RadioError
 from .system import human_size
 from .util import enc, sort_key, spawn, split_path
@@ -586,12 +586,12 @@ class Pages:
             return None
         await self.open_book(os.path.join(self._media_dir("books", rest), key[2:]))
 
-    async def open_book(self, file):
+    async def open_book(self, file, prepared=False):
         apps = self.app.apps
         lang = self.app.settings["wordwise"].get(file)
         if lang and file.lower().endswith(".epub"):
             target = self._wordwise_copy(file, lang)
-            if not os.path.exists(target):
+            if not prepared and not self._wordwise_fresh(file, lang, target):
                 spawn(self._prepare_wordwise(file, lang, target))
                 return
             file_to_open = target
@@ -599,21 +599,43 @@ class Pages:
             file_to_open = file
         if apps.opened_file("koreader") == file_to_open:
             await self.app.resume_app("koreader")
-        else:
-            await self.app.launch(self.app.catalog["koreader"], _strip_ext(os.path.basename(file), BOOK_EXTS),
-                                  [file_to_open])
+            return
+        # The open book saves its page as it closes; then this one opens at the page last
+        # read in any of its versions, with Word Wise or without.
+        await apps.close("koreader")
+        if file.lower().endswith(".epub"):
+            follow_position([file] + [self._wordwise_copy(file, lang) for lang in ("ko", "en")], file_to_open)
+        await self.app.launch(self.app.catalog["koreader"], _strip_ext(os.path.basename(file), BOOK_EXTS),
+                              [file_to_open])
 
     # word wise ---------------------------------------------------------------
 
+    def _glossary_path(self, lang):
+        return os.path.join(self.app.paths["data"], "wordwise", f"en-{lang}.tsv")
+
     def _glossary(self, lang):
         if lang not in self._glossaries:
-            self._glossaries[lang] = Glossary(os.path.join(self.app.paths["data"], "wordwise", f"en-{lang}.tsv"))
+            self._glossaries[lang] = Glossary(self._glossary_path(lang))
         return self._glossaries[lang]
 
     def _wordwise_copy(self, file, lang):
-        stamp = f"{file}|{lang}|{os.path.getmtime(file) if os.path.exists(file) else 0}"
-        key = hashlib.sha1(stamp.encode()).hexdigest()[:16]
+        """One place per book and language, so the page read there outlives a rebuild."""
+        key = hashlib.sha1(f"{file}|{lang}".encode()).hexdigest()[:16]
         return os.path.join(self.app.paths["cache"], "wordwise", key, os.path.basename(file))
+
+    def _wordwise_stamp(self, file, lang):
+        """The book and glossary a copy was made from; compared, never ordered, as clocks drift."""
+        try:
+            return f"{os.path.getmtime(file)}|{os.path.getmtime(self._glossary_path(lang))}"
+        except OSError:
+            return None
+
+    def _wordwise_fresh(self, file, lang, target):
+        try:
+            with open(target + ".stamp") as f:
+                return os.path.exists(target) and f.read() == self._wordwise_stamp(file, lang)
+        except OSError:
+            return False
 
     async def _prepare_wordwise(self, file, lang, target):
         """Hints go into a copy once; the reader opens the copy from then on."""
@@ -622,7 +644,11 @@ class Pages:
         try:
             loop = asyncio.get_running_loop()
             glossary = await loop.run_in_executor(None, self._glossary, lang)
+            stamp = self._wordwise_stamp(file, lang)
             await loop.run_in_executor(None, annotate_epub, file, target, glossary)
+            settle_position(target)
+            with open(target + ".stamp", "w") as f:
+                f.write(stamp or "")
         except Exception as e:
             log.warning("word wise for %s: %s", file, e)
             self.app.toast(self.t("wordwise_failed"))
@@ -630,7 +656,7 @@ class Pages:
         finally:
             self._busy_books.discard(file)
             self.app.page_changed("/books/*")
-        await self.open_book(file)
+        await self.open_book(file, prepared=True)
 
     async def _alt_books(self, path, rest, key):
         if not key.startswith("f:") or not key.lower().endswith(".epub"):

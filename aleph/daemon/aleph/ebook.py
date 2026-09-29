@@ -8,8 +8,11 @@ import zipfile
 SKIP_TAGS = {"head", "title", "script", "style", "ruby", "rt", "rp", "code", "pre", "h1", "h2", "h3",
              "h4", "h5", "h6", "a", "sup", "sub"}
 TAG = re.compile(r"(<[^>]+>)")
-WORD = re.compile(r"(?<![&#\w])[A-Za-z][a-z'-]*[a-z](?![\w;])")
+WORD = re.compile(r"(?<![&#\w])[A-Za-z][a-z']*[a-z](?![\w;])")
 TAG_NAME = re.compile(r"</?\s*([A-Za-z0-9]+)")
+HEAD_END = re.compile(r"</head\s*>", re.I)
+# readers draw ruby at under half size, too small to read at 640x480
+HINT_STYLE = "<style>rt { font-size: 62%; line-height: 1.25; color: #5a5a5a; }</style>"
 
 
 class Glossary:
@@ -54,11 +57,11 @@ def base_forms(w):
     for suffix in ("ing", "ed", "es", "er", "est", "ly", "s"):
         if w.endswith(suffix) and len(w) - len(suffix) >= 3:
             stem = w[:-len(suffix)]
-            forms.append(stem)
             if suffix in ("ing", "ed", "er", "est"):
-                forms.append(stem + "e")
-                if len(stem) > 3 and stem[-1] == stem[-2]:
-                    forms.append(stem[:-1])
+                forms.append(stem + "e")  # soothed is soothe before it is sooth
+            forms.append(stem)
+            if suffix in ("ing", "ed", "er", "est") and len(stem) > 3 and stem[-1] == stem[-2]:
+                forms.append(stem[:-1])
     return forms
 
 
@@ -83,9 +86,8 @@ def annotate_html(text, glossary, rarer_than, seen):
             continue
 
         def replace(m):
+            # names never reach the glossaries, so a capital is only the start of a sentence
             word = m.group(0)
-            if word[0].isupper():
-                return word
             key = word.lower()
             if key in seen:
                 return word
@@ -111,11 +113,93 @@ def annotate_epub(src, dst, glossary, rarer_than=35):
                 text = data.decode("utf-8", errors="replace")
                 seen = set()
                 text = annotate_html(text, glossary, rarer_than, seen)
+                text = HEAD_END.sub(lambda m: HINT_STYLE + m.group(0), text, count=1)
                 count += len(seen)
                 data = text.encode("utf-8")
             zout.writestr(info, data, compress_type=info.compress_type)
     os.replace(tmp, dst)
     return count
+
+
+# the reading position, shared by a book and its Word Wise copies -----------------
+
+XPOINTER = re.compile(r'(\["last_xpointer"\] = ")((?:[^"\\]|\\.)*)(")')
+PERCENT = re.compile(r'(\["percent_finished"\] = )([-+.0-9eE]+)')
+DOM_VERSION = re.compile(r'\["cre_dom_version"\] = (\d+)')
+LAYOUT = re.compile(r'^    \["copt_[a-z_]+"\] = [^{\n]*,$', re.M)
+
+
+def sidecar(path):
+    """Where KOReader keeps a book's reading state."""
+    base, ext = os.path.splitext(path)
+    return os.path.join(f"{base}.sdr", f"metadata{ext}.lua")
+
+
+def _element(xpointer):
+    """Hints split text nodes, so a position is kept to its enclosing element."""
+    return re.sub(r"/(ruby|rt|text\(\)).*$", "", xpointer)
+
+
+def settle_position(book):
+    """A rebuilt copy has new text nodes: keep its reader's page, not the character."""
+    path = sidecar(book)
+    try:
+        with open(path, encoding="utf-8") as f:
+            state = f.read()
+    except OSError:
+        return
+    with open(path + ".part", "w", encoding="utf-8") as f:
+        f.write(XPOINTER.sub(lambda m: m.group(1) + _element(m.group(2)) + m.group(3), state, count=1))
+    os.replace(path + ".part", path)
+
+
+def _mtime(path):
+    try:
+        return os.path.getmtime(sidecar(path))
+    except OSError:
+        return None
+
+
+def follow_position(versions, target):
+    """Open `target` where any version of the same book was read last."""
+    read = [v for v in versions if _mtime(v) is not None]
+    newest = max(read, key=_mtime, default=None)
+    if newest is None or newest == target or (_mtime(target) or 0) >= _mtime(newest):
+        return False
+    try:
+        with open(sidecar(newest), encoding="utf-8") as f:
+            source = f.read()
+    except OSError:
+        return False
+    xp, dom = XPOINTER.search(source), DOM_VERSION.search(source)
+    if not xp or not dom:
+        return False
+    point = _element(xp.group(2))
+    percent = PERCENT.search(source)
+    path = sidecar(target)
+    try:
+        with open(path, encoding="utf-8") as f:
+            state = f.read()
+    except OSError:
+        state = None
+    if state and XPOINTER.search(state):
+        state = XPOINTER.sub(lambda m: m.group(1) + point + m.group(3), state, count=1)
+        if percent:
+            state = PERCENT.sub(lambda m: m.group(1) + percent.group(2), state, count=1)
+    else:
+        # The book's layout comes along; without a rendering mode KOReader treats a book read
+        # before as legacy, and legacy layout cannot draw ruby.
+        layout = LAYOUT.findall(source)
+        if not any('"copt_block_rendering_mode"' in line for line in layout):
+            layout.append('    ["copt_block_rendering_mode"] = 3,')
+        state = "\n".join(["return {", f'    ["cre_dom_version"] = {dom.group(1)},', *layout,
+                           f'    ["last_xpointer"] = "{point}",',
+                           *([f'    ["percent_finished"] = {percent.group(2)},'] if percent else []), "}\n"])
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path + ".part", "w", encoding="utf-8") as f:
+        f.write(state)
+    os.replace(path + ".part", path)
+    return True
 
 
 # a small EPUB 3 writer ---------------------------------------------------------

@@ -14,7 +14,8 @@ from aleph.music import Music  # noqa: E402
 from aleph.pages import BOOK_EXTS, folder_listing  # noqa: E402
 from aleph.apps import AppSpec, Apps  # noqa: E402
 from aleph import news  # noqa: E402
-from aleph.ebook import Glossary, annotate_epub, annotate_html, base_forms, write_epub  # noqa: E402
+from aleph.ebook import (Glossary, annotate_epub, annotate_html, base_forms, follow_position,  # noqa: E402
+                         settle_position, sidecar, write_epub)
 from aleph.i18n import Translator  # noqa: E402
 from aleph.lyrics import parse_lrc  # noqa: E402
 from aleph.power import Power  # noqa: E402
@@ -344,6 +345,11 @@ class WordWiseTest(unittest.TestCase):
         self.assertIn("<ruby>whispering<rt>&lt;speak&gt; softly</rt></ruby>", out)
         self.assertIn("&nbsp;", out)
 
+    def test_compounds_and_sentence_starts(self):
+        out = annotate_html("<p>Scrutinize it. A torn ubiquitous-looking pocket.</p>", self.glossary(), 35, set())
+        self.assertIn("<ruby>Scrutinize<rt>look at closely</rt></ruby> it", out)
+        self.assertIn("<ruby>ubiquitous<rt>present everywhere</rt></ruby>-looking", out)
+
     def test_epub_round_trip(self):
         d = tempfile.mkdtemp()
         src, dst = os.path.join(d, "a.epub"), os.path.join(d, "ww", "a.epub")
@@ -353,10 +359,47 @@ class WordWiseTest(unittest.TestCase):
         with zipfile.ZipFile(dst) as z:
             self.assertEqual(z.namelist()[0], "mimetype")
             self.assertEqual(z.getinfo("mimetype").compress_type, zipfile.ZIP_STORED)
-            self.assertIn("<ruby>ubiquitous", z.read("OEBPS/c0.xhtml").decode())
+            page = z.read("OEBPS/c0.xhtml").decode()
+            self.assertIn("<ruby>ubiquitous", page)
+            self.assertIn("<style>rt {", page)
+
+    def test_position_follows_the_version_read_last(self):
+        d = tempfile.mkdtemp()
+        book, copy = os.path.join(d, "Book.epub"), os.path.join(d, "ww", "Book.epub")
+        os.makedirs(os.path.dirname(sidecar(book)))
+        with open(sidecar(book), "w") as f:
+            f.write('return {\n    ["copt_font_size"] = 26,\n    ["copt_h_page_margins"] = {\n        [1] = 15,\n'
+                    '    },\n    ["cre_dom_version"] = 20240114,\n'
+                    '    ["last_xpointer"] = "/body/DocFragment[3]/body/div/p[4]/text().117",\n'
+                    '    ["percent_finished"] = 0.25,\n}\n')
+        self.assertTrue(follow_position([book, copy], copy))
+        with open(sidecar(copy)) as f:
+            state = f.read()
+        self.assertIn('"/body/DocFragment[3]/body/div/p[4]"', state)
+        self.assertIn("20240114", state)
+        self.assertIn('["copt_block_rendering_mode"] = 3', state, "legacy layout would drop the ruby")
+        self.assertIn('["copt_font_size"] = 26', state)
+        self.assertFalse(follow_position([book, copy], copy), "already where it was read last")
+
+        with open(sidecar(copy), "w") as f:
+            f.write('return {\n    ["bookmarks"] = {},\n    ["cre_dom_version"] = 20240114,\n'
+                    '    ["last_xpointer"] = "/body/DocFragment[9]/body/p[2]/ruby[3]/text().1",\n'
+                    '    ["percent_finished"] = 0.5,\n}\n')
+        os.utime(sidecar(book), (1, 1))
+        self.assertTrue(follow_position([book, copy], book))
+        with open(sidecar(book)) as f:
+            state = f.read()
+        self.assertIn('"/body/DocFragment[9]/body/p[2]"', state)
+        self.assertIn("0.5", state)
+
+        with open(sidecar(copy), "a") as f:
+            f.write("-- rebuilt\n")
+        settle_position(copy)
+        with open(sidecar(copy)) as f:
+            self.assertIn('"/body/DocFragment[9]/body/p[2]"', f.read())
 
 
-RSS = b"""<?xml version="1.0"?><rss version="2.0" xmlns:content="http://purl.org/rss/1.0/modules/content/">
+RSS =b"""<?xml version="1.0"?><rss version="2.0" xmlns:content="http://purl.org/rss/1.0/modules/content/">
 <channel><title>T</title>
 <item><title>Long story</title><link>http://x/1</link><content:encoded><![CDATA[<p>%s</p><p>Second.</p>]]>
 </content:encoded></item>
