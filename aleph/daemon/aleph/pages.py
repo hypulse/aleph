@@ -15,7 +15,8 @@ from .util import enc, sort_key, spawn, split_path
 
 log = logging.getLogger("aleph.pages")
 
-VIDEO_EXTS = (".mp4", ".mkv", ".avi", ".mov", ".webm", ".m4v", ".ts", ".mpg", ".mpeg", ".wmv")
+VIDEO_EXTS = (".mp4", ".mkv", ".avi", ".mov", ".webm", ".m4v", ".ts", ".m2ts", ".mts", ".mpg", ".mpeg", ".wmv",
+              ".asf", ".flv", ".f4v", ".3gp", ".ogv", ".vob", ".divx", ".rm", ".rmvb")
 BOOK_EXTS = (".epub", ".pdf", ".mobi", ".azw3", ".azw", ".fb2", ".fb2.zip", ".cbz", ".cbr", ".djvu",
              ".txt", ".md", ".rtf", ".docx", ".odt", ".html", ".htm", ".chm", ".xps")
 TIMEOUTS = (15, 30, 60, 120, 300, 0)
@@ -383,6 +384,14 @@ class Pages:
     # now playing -------------------------------------------------------------
 
     async def _page_nowplaying(self, path, rest):
+        if rest == ["lyrics"]:
+            player = self.app.state.get("player")
+            found = await self.app.music.lyrics()
+            lines, times = found if found else ([], None)
+            return page(path, player.get("title") or self.t("now_playing"),
+                        [item(f"l{i}", line, "none") for i, line in enumerate(lines)],
+                        style="lyrics", times=times, live=True,
+                        empty=empty("music", self.t("no_lyrics")))
         return {"path": path, "title": self.t("now_playing"), "style": "nowplaying", "items": []}
 
     async def now_playing_options(self):

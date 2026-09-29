@@ -9,7 +9,7 @@
 #include "theme.h"
 
 enum { ACC_NONE, ACC_CHEVRON, ACC_CHECK, ACC_SWITCH, ACC_SPINNER, ACC_PLAYING, ACC_STAR };
-enum { STYLE_LIST, STYLE_NOWPLAYING, STYLE_SLIDER, STYLE_ABOUT, STYLE_COVERFLOW };
+enum { STYLE_LIST, STYLE_NOWPLAYING, STYLE_SLIDER, STYLE_ABOUT, STYLE_COVERFLOW, STYLE_LYRICS };
 enum { FONT_REGULAR, FONT_MEDIUM, FONT_SEMIBOLD, FONT_BOLD, FONT_WEIGHTS };
 
 typedef struct {
@@ -45,6 +45,11 @@ typedef struct Page {
     struct Page *card;
     Uint32 flip_at;
     bool closing;
+    /* lyrics: seconds for each line when they are synced */
+    float *times;
+    int time_count;
+    float ly_scroll;
+    Uint32 ly_at;
 } Page;
 
 typedef struct {
@@ -168,6 +173,7 @@ void draw_text_center(int weight, int size, const char *s, int cx, int y, Rgba c
 int draw_text_wrap(int weight, int size, const char *s, int x, int y, int w, int line_h, int max_lines, Rgba c);
 int draw_text_wrap_center(int weight, int size, const char *s, int cx, int y, int w, int line_h,
                           int max_lines, Rgba c);
+int wrap_count(int weight, int size, const char *s, int w, int max_lines);
 void draw_marquee(int weight, int size, const char *s, int x, int y, int w, Rgba c, Uint32 since);
 bool text_overflows(int weight, int size, const char *s, int max_w);
 SDL_Texture *icon(const char *name);

@@ -16,6 +16,7 @@ from aleph.apps import AppSpec, Apps  # noqa: E402
 from aleph import news  # noqa: E402
 from aleph.ebook import Glossary, annotate_epub, annotate_html, base_forms, write_epub  # noqa: E402
 from aleph.i18n import Translator  # noqa: E402
+from aleph.lyrics import parse_lrc  # noqa: E402
 from aleph.power import Power  # noqa: E402
 from aleph.state import State  # noqa: E402
 from aleph.radio import Radio, station_from_api  # noqa: E402
@@ -397,6 +398,18 @@ class NewsTest(unittest.TestCase):
             second = z.read("OEBPS/c1.xhtml").decode()
         self.assertIn("Paragraph 3 of the article body", second)
         self.assertEqual(news.editions(d), [news.edition_name()])
+
+
+class LyricsTest(unittest.TestCase):
+    def test_synced_lrc(self):
+        lines, times = parse_lrc("[ar:X]\n[offset:+500]\n[00:00.00]\n[00:12.50]Two\n[00:05.00][00:30.00]One and again\n")
+        self.assertEqual(lines, ["One and again", "Two", "One and again"])
+        self.assertEqual(times, [4.5, 12.0, 29.5])
+
+    def test_plain_text(self):
+        lines, times = parse_lrc("\nFirst line\n\nSecond verse\n\n")
+        self.assertEqual((lines, times), (["First line", "", "Second verse"], None))
+        self.assertIsNone(parse_lrc(""))
 
 
 class WifiParsingTest(unittest.TestCase):

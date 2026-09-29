@@ -48,6 +48,7 @@ void page_free(Page *p)
     if (!p)
         return;
     page_free(p->card);
+    SDL_free(p->times);
     items_free(p);
     art_free(p);
     SDL_free(p->shown);
@@ -165,8 +166,21 @@ static void page_fill(Page *p, cJSON *pg)
              : !strcmp(style, "slider")     ? STYLE_SLIDER
              : !strcmp(style, "about")      ? STYLE_ABOUT
              : !strcmp(style, "coverflow")  ? STYLE_COVERFLOW
+             : !strcmp(style, "lyrics")     ? STYLE_LYRICS
                                             : STYLE_LIST;
     SDL_free(style);
+    SDL_free(p->times);
+    p->times = NULL;
+    p->time_count = 0;
+    cJSON *times = cJSON_GetObjectItemCaseSensitive(pg, "times"), *tm;
+    int nt = cJSON_GetArraySize(times);
+    if (nt > 0) {
+        p->times = SDL_calloc((size_t)nt, sizeof(float));
+        cJSON_ArrayForEach(tm, times)
+        {
+            p->times[p->time_count++] = cJSON_IsNumber(tm) ? (float)tm->valuedouble : 0;
+        }
+    }
     char *layout = json_str(pg, "layout");
     p->split = layout && !strcmp(layout, "split");
     SDL_free(layout);
@@ -845,16 +859,21 @@ void nav_key(const char *key, bool repeat)
             page_request(app.overlay);
         }
     } else if (!strcmp(key, "now") && !repeat) {
+        /* Y is Now Playing; pressed there, it turns to the lyrics and back. */
         Page *t = top();
         if (app.overlay)
             close_overlay();
-        if (t && t->style != STYLE_NOWPLAYING)
+        if (t && t->style == STYLE_NOWPLAYING)
+            nav_push("/nowplaying/lyrics", NULL);
+        else if (t && t->style == STYLE_LYRICS)
+            nav_pop();
+        else
             nav_push("/nowplaying", NULL);
     } else {
         Page *p = active_page();
         if (!p)
             return;
-        if (p->style == STYLE_NOWPLAYING)
+        if (p->style == STYLE_NOWPLAYING || p->style == STYLE_LYRICS)
             nowplaying_key(key, repeat);
         else if (p->style == STYLE_SLIDER)
             slider_key(p, key);

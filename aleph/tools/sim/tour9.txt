@@ -1,0 +1,35 @@
+# Lyrics: synced (Neon Coast) and plain (Late Train), turned to with Y from Now Playing.
+wait 1500
+key confirm
+wait 800
+hold down 3
+key confirm
+wait 1200
+key confirm
+wait 1200
+key confirm
+wait 1500
+key now
+wait 1200
+shot l1-lyrics-start.png
+wait 14000
+shot l2-lyrics-synced.png
+key now
+wait 800
+shot l3-back-to-nowplaying.png
+daemon home
+wait 800
+key confirm
+wait 800
+hold down 3
+key confirm
+wait 1200
+hold down 3
+key confirm
+wait 1200
+key down
+key confirm
+wait 1500
+key now
+wait 2500
+shot l4-lyrics-plain.png

@@ -30,6 +30,7 @@ STRINGS = {
     "of": ("{pos} / {count}", "{pos} of {count}"),
     "live": ("라이브", "Live"),
     "nothing_playing": ("재생 중인 항목이 없어요", "Nothing Playing"),
+    "no_lyrics": ("가사가 없어요", "No Lyrics"),
     "shuffle": ("셔플", "Shuffle"),
     "repeat": ("반복", "Repeat"),
     "repeat_one": ("한 곡 반복", "Repeat One"),

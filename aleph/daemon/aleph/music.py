@@ -6,6 +6,7 @@ import random
 import time
 
 from .mpd import MPD, MPDError, records, values
+from .lyrics import parse_lrc
 from .util import matches, sort_key, spawn
 
 log = logging.getLogger("aleph.music")
@@ -46,11 +47,13 @@ class Song(dict):
 
 
 class Music:
-    def __init__(self, mpd: MPD, state, t, cache_dir, notify=None):
+    def __init__(self, mpd: MPD, state, t, cache_dir, notify=None, music_dir="/storage/music"):
         self.mpd = mpd
         self.state = state
         self.t = t
+        self.music_dir = music_dir
         self.art_dir = os.path.join(cache_dir, "art")
+        self.song_changed = lambda: None
         self.notify = notify or (lambda text, icon=None: None)
         self.songs = []
         self.updating = False
@@ -107,6 +110,8 @@ class Music:
         elapsed = _float(status.get("elapsed"))
         self._elapsed = (elapsed, time.monotonic())
         uri = song.get("file", "")
+        if uri != self.state.get("player").get("file"):
+            self.song_changed()
         radio = uri.startswith(STREAM_PREFIXES)
         info = {
             "state": playing if song else "stop",
@@ -176,6 +181,29 @@ class Music:
     def artists(self):
         names = {s["albumartist"] for s in self.songs}
         return sorted(names, key=sort_key)
+
+    async def lyrics(self):
+        """(lines, times or None) for the song playing: an .lrc or .txt beside the file first,
+        then lyrics tags MPD can read. None when there are none."""
+        uri = self.state.get("player").get("file") or ""
+        if not uri or uri.startswith(STREAM_PREFIXES):
+            return None
+        base = os.path.splitext(os.path.join(self.music_dir, uri))[0]
+        for ext in (".lrc", ".txt"):
+            try:
+                with open(base + ext, encoding="utf-8-sig", errors="replace") as f:
+                    found = parse_lrc(f.read())
+                if found:
+                    return found
+            except OSError:
+                continue
+        try:
+            pairs = await self.mpd.call("readcomments", uri)
+        except MPDError:
+            return None
+        text = "\n".join(v for k, v in pairs if k.lower().replace(" ", "") in
+                         ("lyrics", "unsyncedlyrics", "syncedlyrics"))
+        return parse_lrc(text) if text else None
 
     def coverflow_albums(self):
         """Albums in iPod Cover Flow order: by artist, then by album."""

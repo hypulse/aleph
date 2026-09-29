@@ -15,7 +15,7 @@ log = logging.getLogger("aleph.transfer")
 
 AUDIO_EXTS = (".mp3", ".flac", ".m4a", ".aac", ".ogg", ".oga", ".opus", ".wav", ".aif", ".aiff",
               ".wma", ".ape", ".wv", ".mpc", ".dsf", ".dff", ".jpg", ".jpeg", ".png")
-SUBTITLE_EXTS = (".srt", ".ass", ".ssa", ".vtt", ".sub")
+SUBTITLE_EXTS = (".srt", ".smi", ".sami", ".ass", ".ssa", ".vtt", ".sub", ".idx", ".sup")
 MAX_HEADER = 16 << 10
 CHUNK = 1 << 20
 MAX_FAILURES = 10

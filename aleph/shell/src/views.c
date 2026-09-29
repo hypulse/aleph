@@ -293,6 +293,72 @@ static void draw_nowplaying(int x)
     draw_progress_row(pl, SCREEN_H - 42);
 }
 
+/* lyrics ------------------------------------------------------------------- */
+
+#define LY_PAD 40
+#define LY_SIZE 25
+#define LY_LINE 34
+#define LY_GAP 16
+
+static int lyric_height(Page *p, int i, int w)
+{
+    const char *s = p->items[i].title;
+    int n = s && *s ? wrap_count(FONT_SEMIBOLD, LY_SIZE, s, w, 4) : 1;
+    return (n ? n : 1) * LY_LINE + LY_GAP;
+}
+
+static void draw_lyrics(Page *p, int x)
+{
+    if (!p->loaded) {
+        draw_spinner(x + SCREEN_W / 2, CONTENT_Y + CONTENT_H / 2, C_TEXT2);
+        wants_frame = true;
+        return;
+    }
+    if (!p->count) {
+        draw_empty(p, x, CONTENT_Y, SCREEN_W, CONTENT_H);
+        return;
+    }
+    Player *pl = &app.status.player;
+    int w = SCREEN_W - 2 * LY_PAD;
+    double e = live_elapsed(pl);
+    bool synced = p->time_count > 0;
+    int cur = -1;
+    for (int i = 0; synced && i < p->count && i < p->time_count; i++)
+        if (p->times[i] <= e + 0.25)
+            cur = i;
+    int total = 0, cur_y = 0;
+    for (int i = 0; i < p->count; i++) {
+        if (i == cur)
+            cur_y = total;
+        total += lyric_height(p, i, w);
+    }
+    float room = total - CONTENT_H + 60 > 0 ? total - CONTENT_H + 60 : 0;
+    float target = synced ? (cur < 0 ? 0 : cur_y - CONTENT_H * 0.34f)
+                          : (pl->duration > 0 ? (float)(e / pl->duration) * room : 0);
+    target = target < 0 ? 0 : target > room ? room : target;
+    Uint32 now = SDL_GetTicks();
+    float dt = p->ly_at ? (now - p->ly_at) / 1000.0f : 1;
+    p->ly_at = now;
+    p->ly_scroll += (target - p->ly_scroll) * (1 - expf(-dt * 6));
+    if (fabsf(target - p->ly_scroll) > 0.5f)
+        wants_frame = true;
+
+    SDL_RenderSetClipRect(app.renderer, &(SDL_Rect){x < 0 ? 0 : x, CONTENT_Y, SCREEN_W, CONTENT_H});
+    int y = CONTENT_Y + 26 - (int)p->ly_scroll;
+    for (int i = 0; i < p->count; i++) {
+        int h = lyric_height(p, i, w);
+        if (y + h > CONTENT_Y && y < SCREEN_H && p->items[i].title && *p->items[i].title) {
+            Rgba c = !synced ? C_TEXT : i == cur ? C_TEXT : i < cur ? C_TEXT3 : C_TEXT2;
+            draw_text_wrap(synced && i == cur ? FONT_BOLD : FONT_SEMIBOLD, LY_SIZE, p->items[i].title,
+                           x + LY_PAD, y, w, LY_LINE, 4, c);
+        }
+        y += h;
+    }
+    SDL_RenderSetClipRect(app.renderer, NULL);
+    fill_gradient(x, CONTENT_Y, SCREEN_W, 24, RGBA(255, 255, 255, 255), RGBA(255, 255, 255, 0));
+    fill_gradient(x, SCREEN_H - 48, SCREEN_W, 48, RGBA(255, 255, 255, 0), RGBA(255, 255, 255, 255));
+}
+
 /* slider ------------------------------------------------------------------ */
 
 static void draw_slider(Page *p, int x)
@@ -637,6 +703,8 @@ static void draw_page(Page *p, int x)
         draw_slider(p, x);
     else if (p->style == STYLE_COVERFLOW)
         draw_coverflow(p, x);
+    else if (p->style == STYLE_LYRICS)
+        draw_lyrics(p, x);
     else if (p->split) {
         draw_list(p, x, CONTENT_Y, SPLIT_LIST_W, CONTENT_H);
         draw_preview(p, x);
@@ -965,6 +1033,8 @@ int next_frame_delay(void)
         return 16;
     int delay = wants_slow_frame ? 40 : -1;
     Page *p = top();
+    if (p && p->style == STYLE_LYRICS && !strcmp(app.status.player.state, "play"))
+        delay = 120;
     if (p && p->style == STYLE_NOWPLAYING && !strcmp(app.status.player.state, "play")) {
         double e = app.status.player.elapsed + (SDL_GetTicks() - app.status.player.elapsed_at) / 1000.0;
         delay = (int)((1.0 - (e - (int)e)) * 1000) + 5;

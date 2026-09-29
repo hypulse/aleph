@@ -85,6 +85,45 @@ def cover(path, colors, motif, title, artist):
     img.save(path, quality=92)
 
 
+# Lyrics written for these fictional songs: a synced .lrc and a plain .txt beside the files.
+LYRICS = {
+    ("Aurora Lane", "Night Drive", 1, "Neon Coast"): [
+        (0, ""), (6, "City lights are folding into the sea"), (12, "Radio low, just the road and me"),
+        (18, "Every mile marker counting down"), (24, "The neon coast is the only town"),
+        (31, "Hold the wheel, hold the night"), (37, "We run on borrowed starlight"),
+        (44, "Neon coast, neon coast"), (50, "Take me where the signal's lost"),
+    ],
+    ("서울 야경", "한강의 밤", 1, "한강의 밤"): [
+        (0, ""), (5, "강물 위로 번지는 불빛"), (11, "다리 아래 머무는 바람"), (17, "오늘 하루도 여기까지"),
+        (23, "천천히 걸어도 괜찮아"), (30, "한강의 밤 너와 나"), (36, "말없이 건너는 다리"),
+    ],
+}
+PLAIN_LYRICS = {
+    ("The Midnight Owls", "Quiet Hours", 2, "Late Train"): (
+        "The last train leaves at a quarter past one\n"
+        "The station clock forgot the sun\n\n"
+        "A folded ticket, a borrowed coat\n"
+        "A melody I never wrote\n\n"
+        "Ride the late train home\n"
+        "Ride it on your own\n"
+    ),
+}
+
+
+def write_lyrics(folder, artist, album, n, title):
+    base = os.path.join(folder, f"{n:02d} {title}")
+    synced = LYRICS.get((artist, album, n, title))
+    if synced:
+        with open(base + ".lrc", "w", encoding="utf-8") as f:
+            f.write(f"[ar:{artist}]\n[ti:{title}]\n")
+            for t, line in synced:
+                f.write(f"[{t // 60:02d}:{t % 60:02d}.00]{line}\n")
+    plain = PLAIN_LYRICS.get((artist, album, n, title))
+    if plain:
+        with open(base + ".txt", "w", encoding="utf-8") as f:
+            f.write(plain)
+
+
 def main(root):
     music = os.path.join(root, "music")
     os.makedirs(music, exist_ok=True)
@@ -94,6 +133,7 @@ def main(root):
         art = os.path.join(folder, "cover.jpg")
         cover(art, colors, motif, album, artist)
         for n, (title, seconds) in enumerate(tracks, 1):
+            write_lyrics(folder, artist, album, n, title)
             out = os.path.join(folder, f"{n:02d} {title}.mp3")
             if os.path.exists(out):
                 continue

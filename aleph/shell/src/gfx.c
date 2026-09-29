@@ -342,7 +342,7 @@ void draw_text_center(int weight, int size, const char *s, int cx, int y, Rgba c
 
 /* Greedy word wrap that also breaks inside long words (Hangul has no spaces to rely on). */
 static int wrap_text(int weight, int size, const char *s, int x, int y, int w, int line_h, int max_lines,
-                     Rgba c, bool center)
+                     Rgba c, bool center, bool draw)
 {
     TTF_Font *f = font(weight, size);
     if (!f || !s || !*s)
@@ -379,7 +379,8 @@ static int wrap_text(int weight, int size, const char *s, int x, int y, int w, i
         if (end <= start && !newline)
             end = best > start ? best : start + 1;
         if (lines == max_lines - 1 && end < len) {
-            draw_text(weight, size, s + start, center ? x - w / 2 : x, y + lines * line_h, c, w);
+            if (draw)
+                draw_text(weight, size, s + start, center ? x - w / 2 : x, y + lines * line_h, c, w);
             lines++;
             break;
         }
@@ -391,7 +392,8 @@ static int wrap_text(int weight, int size, const char *s, int x, int y, int w, i
             TTF_SizeUTF8(f, buf, &tw, NULL);
             lx = x - tw / 2;
         }
-        draw_text(weight, size, buf, lx, y + lines * line_h, c, 0);
+        if (draw)
+            draw_text(weight, size, buf, lx, y + lines * line_h, c, 0);
         lines++;
         start = newline ? end + 1 : end;
     }
@@ -402,13 +404,18 @@ static int wrap_text(int weight, int size, const char *s, int x, int y, int w, i
 int draw_text_wrap(int weight, int size, const char *s, int x, int y, int w, int line_h, int max_lines,
                    Rgba c)
 {
-    return wrap_text(weight, size, s, x, y, w, line_h, max_lines, c, false);
+    return wrap_text(weight, size, s, x, y, w, line_h, max_lines, c, false, true);
+}
+
+int wrap_count(int weight, int size, const char *s, int w, int max_lines)
+{
+    return wrap_text(weight, size, s, 0, 0, w, 0, max_lines, RGB(0, 0, 0), false, false);
 }
 
 int draw_text_wrap_center(int weight, int size, const char *s, int cx, int y, int w, int line_h,
                           int max_lines, Rgba c)
 {
-    return wrap_text(weight, size, s, cx, y, w, line_h, max_lines, c, true);
+    return wrap_text(weight, size, s, cx, y, w, line_h, max_lines, c, true, true);
 }
 
 void draw_marquee(int weight, int size, const char *s, int x, int y, int w, Rgba c, Uint32 since)
