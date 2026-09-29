@@ -166,7 +166,7 @@ static void draw_empty(Page *p, int x, int y, int w, int h)
     draw_text_center(FONT_SEMIBOLD, FONT_BIG - 6, p->empty_title ? p->empty_title : S("empty_list", ""),
                      x + w / 2, cy - 18, C_TEXT, w - 60);
     if (p->empty_text)
-        draw_text_center(FONT_REGULAR, FONT_SUB, p->empty_text, x + w / 2, cy + 24, C_TEXT2, w - 60);
+        draw_text_wrap_center(FONT_REGULAR, FONT_SUB, p->empty_text, x + w / 2, cy + 24, w - 80, 30, 3, C_TEXT2);
 }
 
 static void draw_list(Page *p, int x, int y, int w, int h)

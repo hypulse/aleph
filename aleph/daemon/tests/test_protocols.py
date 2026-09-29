@@ -11,7 +11,9 @@ from aleph.audio import _sink  # noqa: E402
 from aleph.battery import Battery  # noqa: E402
 from aleph.mpd import MPD, filter_expr, quote, records, values  # noqa: E402
 from aleph.pages import BOOK_EXTS, folder_listing  # noqa: E402
+from aleph.i18n import Translator  # noqa: E402
 from aleph.radio import Radio, station_from_api  # noqa: E402
+from aleph.transfer import Transfer, safe_parts  # noqa: E402
 from aleph.util import enc, fmt_duration, index_letter, matches, sort_key, split_path  # noqa: E402
 from aleph.wifi import parse_terse  # noqa: E402
 
@@ -134,6 +136,60 @@ class BatteryWarningTest(unittest.TestCase):
         b._warn(50, charging=True)
         b._warn(19, charging=False)
         self.assertEqual(said[-1], 19)
+
+
+class FakeTransferApp:
+    def __init__(self, root):
+        self.t = Translator("en")
+        self.paths = {k: os.path.join(root, k) for k in ("music", "videos", "books")}
+        self.changed = []
+        self.power = type("P", (), {"activity": lambda self: None})()
+        self.music = type("M", (), {"update_library": staticmethod(lambda: asyncio.sleep(0))})()
+
+    def page_changed(self, *paths):
+        self.changed.extend(paths)
+
+
+class TransferTest(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        self.root = tempfile.mkdtemp()
+        self.app = FakeTransferApp(self.root)
+        self.tr = Transfer(self.app, (".mp4",), (".epub",), ports=(0,))
+        self.assertTrue(await self.tr.start())
+
+    async def asyncTearDown(self):
+        self.tr.stop()
+
+    async def request(self, method, path, body=b"", code=None):
+        reader, writer = await asyncio.open_connection("127.0.0.1", self.tr.port)
+        head = f"{method} {path} HTTP/1.1\r\nHost: x\r\nContent-Length: {len(body)}\r\n"
+        if code is not None:
+            head += f"X-Aleph-Code: {code}\r\n"
+        writer.write(head.encode() + b"\r\n" + body)
+        await writer.drain()
+        data = await reader.read()
+        writer.close()
+        return int(data.split(b" ", 2)[1]), data.split(b"\r\n\r\n", 1)[1]
+
+    async def test_page_and_uploads(self):
+        status, body = await self.request("GET", "/")
+        self.assertEqual(status, 200)
+        self.assertIn("Add Files to aleph".encode(), body)
+        self.assertEqual((await self.request("PUT", "/upload/a.mp3", b"x", code="nope"))[0], 403)
+        status, _ = await self.request("PUT", "/upload/Album%20One/01.mp3", b"abc", code=self.tr.code)
+        self.assertEqual(status, 201)
+        with open(os.path.join(self.root, "music", "Album One", "01.mp3"), "rb") as f:
+            self.assertEqual(f.read(), b"abc")
+        self.assertEqual((await self.request("PUT", "/upload/b.epub", b"e", code=self.tr.code))[0], 201)
+        self.assertTrue(os.path.exists(os.path.join(self.root, "books", "b.epub")))
+        self.assertEqual((await self.request("PUT", "/upload/x.exe", b"e", code=self.tr.code))[0], 415)
+        self.assertEqual((await self.request("PUT", "/upload/..%2Fescape.mp3", b"e", code=self.tr.code))[0], 400)
+        self.assertEqual(self.tr.received, 2)
+
+    def test_safe_parts(self):
+        self.assertEqual(safe_parts("a/b%20c/d.mp3"), ["a", "b c", "d.mp3"])
+        self.assertIsNone(safe_parts("../x.mp3"))
+        self.assertIsNone(safe_parts(".hidden/x.mp3"))
 
 
 class WifiParsingTest(unittest.TestCase):

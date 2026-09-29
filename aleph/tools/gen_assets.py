@@ -118,6 +118,12 @@ def empty_icons(P):
         poly(d, [(38, 27.5), (57, 24), (57, 46.5), (38, 50)])
     glyph("book", book)
 
+    def upload(d):
+        line(d, [(36, 44), (36, 20)], 3.6)
+        line(d, [(26, 30), (36, 20), (46, 30)], 3.6)
+        line(d, [(20, 42), (20, 52), (52, 52), (52, 42)], 3.6)
+    glyph("upload", upload)
+
     def game(d):
         rrect(d, 13, 25, 59, 49, 12)
         d.rectangle([s(20), s(35.5), s(31), s(38.5)], fill=CLEAR)

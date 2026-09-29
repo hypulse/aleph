@@ -126,6 +126,8 @@ class Pages:
     def leave(self, path):
         if path in ("/settings/bluetooth",):
             self.app.bluetooth.end_discovery()
+        elif path == "/settings/transfer":
+            self.app.transfer.stop()
 
     # root --------------------------------------------------------------------
 
@@ -589,9 +591,25 @@ class Pages:
             item("display", t("display")),
             item("power", t("power")),
             item("language", t("language"), value=lang),
+            item("transfer", t("add_files")),
             item("about", t("about")),
         ]
         return page(path, t("settings"), items, live=True)
+
+    async def _settings_transfer(self, path):
+        t = self.t
+        tr = self.app.transfer
+        if not self.app.state.get("wifi")["ssid"] and not self.app.sim:
+            tr.stop()
+            return page(path, t("add_files"), [], live=True,
+                        empty=empty("wifi", t("transfer_no_wifi"), t("transfer_no_wifi_text")))
+        url = tr.url() if await tr.start() else None
+        if not url:
+            return page(path, t("add_files"), [], empty=empty("wifi", t("transfer_failed")))
+        text = t("transfer_text", code=tr.code)
+        if tr.received:
+            text += "\n" + t("transfer_received", n=tr.received)
+        return page(path, t("add_files"), [], live=True, empty=empty("upload", url, text))
 
     async def _settings_wifi(self, path):
         t = self.t

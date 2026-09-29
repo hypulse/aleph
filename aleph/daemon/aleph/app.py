@@ -12,12 +12,13 @@ from .input import Input
 from .ipc import Server
 from .mpd import MPD
 from .music import Music
-from .pages import Pages
+from .pages import BOOK_EXTS, VIDEO_EXTS, Pages
 from .power import Power
 from .radio import Radio
 from .settings import Settings
 from .state import State
 from .system import System
+from .transfer import Transfer
 from .util import spawn
 from .wifi import FakeWifi, Nmcli, Wifi
 
@@ -51,6 +52,7 @@ class App:
                          sim=self.sim)
         self.catalog = catalog(args.data, lambda: self.t.lang, sim=self.sim)
         self.pages = Pages(self)
+        self.transfer = Transfer(self, VIDEO_EXTS, BOOK_EXTS)
         self.input = None if self.sim else Input(self)
         self._last_player_state = "stop"
         self._page_paths = set()

@@ -154,6 +154,8 @@ int draw_text(int weight, int size, const char *s, int x, int y, Rgba c, int max
 int draw_text_right(int weight, int size, const char *s, int right, int y, Rgba c);
 void draw_text_center(int weight, int size, const char *s, int cx, int y, Rgba c, int max_w);
 int draw_text_wrap(int weight, int size, const char *s, int x, int y, int w, int line_h, int max_lines, Rgba c);
+int draw_text_wrap_center(int weight, int size, const char *s, int cx, int y, int w, int line_h,
+                          int max_lines, Rgba c);
 void draw_marquee(int weight, int size, const char *s, int x, int y, int w, Rgba c, Uint32 since);
 bool text_overflows(int weight, int size, const char *s, int max_w);
 SDL_Texture *icon(const char *name);

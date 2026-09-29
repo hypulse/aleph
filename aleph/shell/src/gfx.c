@@ -306,8 +306,8 @@ void draw_text_center(int weight, int size, const char *s, int cx, int y, Rgba c
 }
 
 /* Greedy word wrap that also breaks inside long words (Hangul has no spaces to rely on). */
-int draw_text_wrap(int weight, int size, const char *s, int x, int y, int w, int line_h, int max_lines,
-                   Rgba c)
+static int wrap_text(int weight, int size, const char *s, int x, int y, int w, int line_h, int max_lines,
+                     Rgba c, bool center)
 {
     TTF_Font *f = font(weight, size);
     if (!f || !s || !*s)
@@ -318,7 +318,12 @@ int draw_text_wrap(int weight, int size, const char *s, int x, int y, int w, int
         while (s[start] == ' ')
             start++;
         int best = start, last_space = -1, i = start;
+        bool newline = false;
         while (i < len) {
+            if (s[i] == '\n') {
+                newline = true;
+                break;
+            }
             int next = i + 1;
             while (next < len && ((unsigned char)s[next] & 0xC0) == 0x80)
                 next++;
@@ -333,24 +338,42 @@ int draw_text_wrap(int weight, int size, const char *s, int x, int y, int w, int
             best = next;
             i = next;
         }
-        int end = best;
-        if (end < len && last_space > start)
+        int end = newline ? i : best;
+        if (!newline && end < len && last_space > start)
             end = last_space;
-        if (end <= start)
+        if (end <= start && !newline)
             end = best > start ? best : start + 1;
         if (lines == max_lines - 1 && end < len) {
-            draw_text(weight, size, s + start, x, y + lines * line_h, c, w);
+            draw_text(weight, size, s + start, center ? x - w / 2 : x, y + lines * line_h, c, w);
             lines++;
             break;
         }
         memcpy(buf, s + start, (size_t)(end - start));
         buf[end - start] = 0;
-        draw_text(weight, size, buf, x, y + lines * line_h, c, 0);
+        int lx = x;
+        if (center) {
+            int tw = 0;
+            TTF_SizeUTF8(f, buf, &tw, NULL);
+            lx = x - tw / 2;
+        }
+        draw_text(weight, size, buf, lx, y + lines * line_h, c, 0);
         lines++;
-        start = end;
+        start = newline ? end + 1 : end;
     }
     SDL_free(buf);
     return lines;
+}
+
+int draw_text_wrap(int weight, int size, const char *s, int x, int y, int w, int line_h, int max_lines,
+                   Rgba c)
+{
+    return wrap_text(weight, size, s, x, y, w, line_h, max_lines, c, false);
+}
+
+int draw_text_wrap_center(int weight, int size, const char *s, int cx, int y, int w, int line_h,
+                          int max_lines, Rgba c)
+{
+    return wrap_text(weight, size, s, cx, y, w, line_h, max_lines, c, true);
 }
 
 void draw_marquee(int weight, int size, const char *s, int x, int y, int w, Rgba c, Uint32 since)
