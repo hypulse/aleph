@@ -3,6 +3,7 @@ import json
 import logging
 import os
 import shutil
+import signal
 import time
 
 from .util import run, spawn
@@ -17,6 +18,21 @@ MIN_AVAILABLE_MB = 256
 
 def _first_existing(*paths):
     return next((p for p in paths if p and (os.path.exists(p) or shutil.which(p))), None)
+
+
+def _group_alive(pgid):
+    """Any process of the group still running (zombies waiting for a reaper do not count)."""
+    for pid in os.listdir("/proc"):
+        if not pid.isdigit():
+            continue
+        try:
+            with open(f"/proc/{pid}/stat") as f:
+                fields = f.read().rsplit(")", 1)[1].split()
+        except (OSError, IndexError):
+            continue
+        if fields[0] != "Z" and int(fields[2]) == pgid:
+            return True
+    return False
 
 
 def _available_mb():
@@ -58,6 +74,7 @@ return {
     ["back_in_reader"] = "default",
     ["back_to_exit"] = "always",
     ["quickstart_shown_version"] = 999999999,
+    ["color_rendering"] = true,
 }
 """
 
@@ -102,13 +119,16 @@ def catalog(data_dir, lang=lambda: "ko", sim=False):
 
 
 class Apps:
-    """External programs run as transient systemd units, one sway workspace each."""
+    """External programs, one sway workspace each. On the device each is a transient systemd
+    unit frozen through its cgroup; a desktop session runs them as process groups stopped with
+    SIGSTOP; the simulator only records the launch."""
 
-    def __init__(self, state, events, env, sim=False):
+    def __init__(self, state, events, env, sim=False, runner=None):
         self.state = state
         self.events = events
         self.env = env
-        self.sim = sim
+        self.runner = runner or ("sim" if sim else "systemd")
+        self.sim = self.runner == "sim"
         self.running = {}
         self.front = None
         self._lock = asyncio.Lock()
@@ -116,6 +136,20 @@ class Apps:
     async def start(self):
         if not self.sim:
             spawn(self._watch_sway())
+
+    async def _alive(self, app):
+        if self.runner == "direct":
+            return app["proc"].returncode is None
+        if self.sim:
+            return True
+        _, out, _ = await run("systemctl", "is-active", f"{app['unit']}.service")
+        return out.strip() in ("active", "activating", "deactivating", "reloading")
+
+    def _group(self, app, sig):
+        try:
+            os.killpg(app["proc"].pid, sig)
+        except (ProcessLookupError, PermissionError):
+            pass
 
     @property
     def front_plays_media(self):
@@ -135,7 +169,9 @@ class Apps:
         return app["awake"] if app else None
 
     async def _signal(self, app, verb):
-        if not self.sim:
+        if self.runner == "direct":
+            self._group(app, signal.SIGSTOP if verb == "freeze" else signal.SIGCONT)
+        elif not self.sim:
             await run("systemctl", verb, f"{app['unit']}.service")
 
     async def set_dark(self, dark):
@@ -179,12 +215,25 @@ class Apps:
         argv = list(spec.argv) + list(extra_args)
         if argv[0] == "mpv":
             argv.insert(1, f"--wayland-app-id={app_id}")
-        env = {**self.env, **spec.env, "SDL_VIDEO_WAYLAND_WMCLASS": app_id, "SDL_VIDEO_X11_WMCLASS": app_id}
+        env = {**self.env, **spec.env, "SDL_VIDEO_WAYLAND_WMCLASS": app_id, "SDL_VIDEO_X11_WMCLASS": app_id,
+               "SDL_APP_ID": app_id}
         self.running[spec.key] = {"title": title, "unit": unit, "workspace": workspace, "frozen": False,
                                   "app_id": app_id, "media": spec.pauses_music, "args": list(extra_args),
                                   "awake": spec.awake, "used_at": time.monotonic()}
         if self.sim:
             log.info("sim: launch %s", argv)
+        elif self.runner == "direct":
+            if spec.setup:
+                spec.setup()
+            try:
+                proc = await asyncio.create_subprocess_exec(*argv, env={**os.environ, **env}, start_new_session=True)
+            except OSError as e:
+                log.warning("launch failed: %s", e)
+                self.running.pop(spec.key, None)
+                return False
+            self.running[spec.key]["proc"] = proc
+            await run("swaymsg", "workspace", "number", str(workspace))
+            spawn(self._watch_start(spec.key, unit))
         else:
             if spec.setup:
                 spec.setup()
@@ -211,8 +260,7 @@ class Apps:
             app = self.running.get(key)
             if not app or app["unit"] != unit:
                 return
-            _, out, _ = await run("systemctl", "is-active", f"{unit}.service")
-            if out.strip() not in ("active", "activating", "deactivating", "reloading"):
+            if not await self._alive(app):
                 log.warning("%s exited during start", unit)
                 self.events.app_failed(app["title"])
                 await self._reap(key, delay=0)
@@ -254,7 +302,17 @@ class Apps:
         app = self.running.pop(key, None)
         if not app:
             return
-        if not self.sim:
+        if self.runner == "direct":
+            # Launchers are often shell scripts that die at once; the program under them
+            # is still saving, so wait for the whole group like systemd waits for the unit.
+            self._group(app, signal.SIGCONT)
+            self._group(app, signal.SIGTERM)
+            deadline = time.monotonic() + 5
+            while _group_alive(app["proc"].pid) and time.monotonic() < deadline:
+                await asyncio.sleep(0.1)
+            self._group(app, signal.SIGKILL)
+            await app["proc"].wait()
+        elif not self.sim:
             await run("systemctl", "thaw", f"{app['unit']}.service")
             await run("systemctl", "stop", f"{app['unit']}.service", timeout=6)
         if self.front == key:
@@ -298,10 +356,7 @@ class Apps:
     async def _reap(self, key, delay=0.5):
         await asyncio.sleep(delay)
         app = self.running.get(key)
-        if not app:
-            return
-        _, out, _ = await run("systemctl", "is-active", f"{app['unit']}.service")
-        if out.strip() in ("active", "activating", "deactivating", "reloading"):
+        if not app or await self._alive(app):
             return
         self.running.pop(key, None)
         if self.front == key:

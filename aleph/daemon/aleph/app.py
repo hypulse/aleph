@@ -51,9 +51,10 @@ class App:
                            remember=lambda level: spawn(self.system.rocknix_setting("audio.volume", level)))
         self.power = Power(self.state, self.settings, self, sim=self.sim)
         self.battery = Battery(self.state, notify=self._battery_low, sim=self.sim)
+        runner = getattr(args, "apps", None) or ("sim" if self.sim else "systemd")
         self.apps = Apps(self.state, self, {k: v for k, v in os.environ.items() if k in APP_ENV_KEYS},
-                         sim=self.sim)
-        self.catalog = catalog(args.data, lambda: self.t.lang, sim=self.sim)
+                         runner=runner)
+        self.catalog = catalog(args.data, lambda: self.t.lang, sim=runner == "sim")
         self.pages = Pages(self)
         self.transfer = Transfer(self, VIDEO_EXTS, BOOK_EXTS)
         self.input = None if self.sim else Input(self)

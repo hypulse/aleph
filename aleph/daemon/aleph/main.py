@@ -20,6 +20,8 @@ def parse_args(argv=None):
     p.add_argument("--data", default="/usr/share/aleph")
     p.add_argument("--mpd", default=os.environ.get("MPD_HOST", "/run/mpd/socket"))
     p.add_argument("--mpd-port", type=int, default=6600)
+    p.add_argument("--apps", choices=("systemd", "direct", "sim"),
+                   help="how apps run: systemd units (device), process groups (desktop), or not at all")
     p.add_argument("-v", "--verbose", action="store_true")
     return p.parse_args(argv)
 
