@@ -8,7 +8,7 @@ on:
 
 concurrency:
   group: aleph-h700-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 env:
   PROJECT: ROCKNIX
@@ -24,8 +24,9 @@ env:
   CCACHE_COMPRESS: 1
   CCACHE_COMPRESSLEVEL: 6
   CCACHE_SLOPPINESS: pch_defines,time_macros,include_file_mtime,include_file_ctime
+  CCACHE_MAXSIZE: 2G
   BUILDER: ghcr.io/rocknix/rocknix-build:latest
-  BUILD_DIR: build.aleph-H700.aarch64
+  ALEPH_BUILD: build.aleph-H700.aarch64
 
 jobs:
   toolchain:
@@ -46,7 +47,7 @@ jobs:
       - name: Restore ccache
         uses: actions/cache/restore@v4
         with:
-          path: ${{ env.BUILD_DIR }}/.ccache
+          path: ${{ env.ALEPH_BUILD }}/.ccache
           key: ccache-toolchain-${{ github.sha }}
           restore-keys: ccache-toolchain-
 
@@ -67,19 +68,19 @@ jobs:
           name: logs-toolchain
           path: |
             output.log
-            ${{ env.BUILD_DIR }}/.threads/logs/
+            ${{ env.ALEPH_BUILD }}/.threads/logs/
 
       - name: Save ccache
         if: always()
         uses: actions/cache/save@v4
         with:
-          path: ${{ env.BUILD_DIR }}/.ccache
+          path: ${{ env.ALEPH_BUILD }}/.ccache
           key: ccache-toolchain-${{ github.sha }}
 
       - name: Pack build directory
         run: |
-          rm -rf ${BUILD_DIR}/.ccache
-          sudo tar --zstd --remove-files -cf toolchain.tar.zst ${BUILD_DIR}
+          rm -rf ${ALEPH_BUILD}/.ccache
+          sudo tar --zstd --remove-files -cf toolchain.tar.zst ${ALEPH_BUILD}
 
       - uses: actions/upload-artifact@v7
         with:
@@ -114,7 +115,7 @@ jobs:
       - name: Restore ccache
         uses: actions/cache/restore@v4
         with:
-          path: ${{ env.BUILD_DIR }}/.ccache
+          path: ${{ env.ALEPH_BUILD }}/.ccache
           key: ccache-image-${{ github.sha }}
           restore-keys: ccache-image-
 
@@ -135,13 +136,13 @@ jobs:
           name: logs-image
           path: |
             output.log
-            ${{ env.BUILD_DIR }}/.threads/logs/
+            ${{ env.ALEPH_BUILD }}/.threads/logs/
 
       - name: Save ccache
         if: always()
         uses: actions/cache/save@v4
         with:
-          path: ${{ env.BUILD_DIR }}/.ccache
+          path: ${{ env.ALEPH_BUILD }}/.ccache
           key: ccache-image-${{ github.sha }}
 
       - uses: actions/upload-artifact@v7
