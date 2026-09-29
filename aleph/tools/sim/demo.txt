@@ -226,25 +226,23 @@ key confirm
 wait 2000
 shot d20-closed.png
 
-caption 설정 › 사운드 · 최대 음량
+caption 설정 › 최대 음량 · 헤드폰 볼륨의 상한
 hold up 12
 hold down 5
+wait 500
+key confirm
+wait 900
+hold down 3
 wait 500
 key confirm
 wait 900
 hold down 2
 wait 500
 key confirm
-wait 1200
-key confirm
 wait 1500
-shot d21-sound.png
-key back
-wait 500
-key back
-wait 600
-caption 설정 › 화면 · 밝기, 그리고 선택 목록은 지금 값에서 시작해요
-key down
+shot d21-limit.png
+caption 설정 › 화면 · 밝기, 화면 끄기, 뚜껑을 닫을 때
+key up
 wait 500
 key confirm
 wait 900
@@ -261,13 +259,8 @@ wait 2000
 shot d22-timeout.png
 key back
 wait 500
-key back
-wait 600
-caption 설정 › 전원 · 뚜껑을 닫으면 음악은 계속 재생
 key down
-wait 500
-key confirm
-wait 1500
+wait 400
 key confirm
 wait 2000
 shot d23-lid.png
@@ -276,7 +269,7 @@ wait 500
 key back
 wait 600
 caption Wi-Fi로 파일 넣기 · 브라우저에 끌어다 놓으면 종류별로 들어가요
-hold down 2
+hold down 3
 wait 500
 key confirm
 wait 3500
