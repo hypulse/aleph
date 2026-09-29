@@ -11,7 +11,6 @@
 #define HEADER_H 34
 #define PAD_X 22
 #define ART_THUMB 56
-#define ART_RADIUS 7
 
 /* Split menus keep the list on the left and an artwork panel on the right, as the last
  * iPod classic did. */

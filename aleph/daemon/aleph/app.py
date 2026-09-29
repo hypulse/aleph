@@ -48,13 +48,15 @@ class App:
                                    self.state, self.settings, self.t, self, self.system)
         self.wifi = Wifi(FakeWifi() if self.sim else Nmcli(), self.state, self.t, self)
         self.audio = Audio(FakeAudio() if self.sim else Pactl(), self.state, self.settings,
-                           remember=lambda level: spawn(self.system.rocknix_setting("audio.volume", level)))
+                           remember=lambda level: spawn(self.system.rocknix_setting("audio.volume", level)),
+                           lost=self._route_lost)
         self.power = Power(self.state, self.settings, self, sim=self.sim)
         self.battery = Battery(self.state, notify=self._battery_low, sim=self.sim)
         runner = getattr(args, "apps", None) or ("sim" if self.sim else "systemd")
         self.apps = Apps(self.state, self, {k: v for k, v in os.environ.items() if k in APP_ENV_KEYS},
                          runner=runner)
-        self.catalog = catalog(args.data, lambda: self.t.lang, sim=runner == "sim")
+        self.catalog = catalog(args.data, lambda: self.t.lang, sim=runner == "sim",
+                               run_dir=os.path.dirname(args.socket))
         self.pages = Pages(self)
         self.transfer = Transfer(self, VIDEO_EXTS, BOOK_EXTS)
         self.input = None if self.sim else Input(self)
@@ -113,25 +115,20 @@ class App:
 
     def audio_device_found(self, device):
         if self.sim:
-            self.audio.backend.add_bluetooth(device.name)
-        spawn(self._park_later())
-
-    async def _park_later(self):
-        await asyncio.sleep(1.5)
-        if self.state.get("volume")["output"] == "bluetooth":
-            await self.audio.park_speaker()
-            await self.audio.clamp_to_limit()
+            self.audio.backend.add_bluetooth(device.name, device.address)
 
     def audio_device_lost(self, device):
-        spawn(self._audio_lost())
-
-    async def _audio_lost(self):
-        if self.settings["pause_on_disconnect"]:
-            await self.music.pause()
-            await self.music.reset_output()
+        self.audio.bluetooth_lost(device.address)
         if self.sim:
-            self.audio.backend.remove_bluetooth()
-        await self.audio.unpark_speaker()
+            self.audio.backend.remove_bluetooth(device.address)
+
+    async def _route_lost(self, kind):
+        """Headphones gone, wired or Bluetooth: music and a video pause, as on an iPhone."""
+        if not self.settings["pause_on_unplug" if kind == "wired" else "pause_on_disconnect"]:
+            return
+        await asyncio.gather(self.music.pause(), self.apps.pause_media())
+        if kind == "bluetooth":
+            await self.music.reset_output()
 
     def _update_exclusive(self):
         """The gamepad belongs to the app in front only while the screen is lit."""
@@ -241,9 +238,9 @@ class App:
         await self.power.lid(closed)
 
     def jack(self, inserted, initial=False):
-        if (not initial and not inserted and self.settings["pause_on_unplug"]
-                and self.state.get("player")["state"] == "play"):
-            spawn(self.music.pause())
+        if self.sim:
+            self.audio.backend.plug(inserted)
+        self.audio.jack(inserted, initial)
 
     # requests from the shell -------------------------------------------------
 
@@ -292,13 +289,15 @@ class App:
             self.power.activity()
             return {}
         if op == "sim" and self.sim:
-            # Hardware the simulator lacks: the lid, a held power key, the battery.
+            # Hardware the simulator lacks: the lid, a held power key, the battery, the jack.
             if "lid" in req:
                 await self.lid(bool(req["lid"]))
             if "power" in req:
                 await self.power.power_key(bool(req["power"]))
             if "battery" in req:
                 self.battery.simulate(int(req["battery"]))
+            if "jack" in req:
+                self.jack(bool(req["jack"]))
             return {}
         raise ValueError(f"unknown op {op}")
 

@@ -35,6 +35,17 @@ def _group_alive(pgid):
     return False
 
 
+async def _mpv(path, command):
+    try:
+        reader, writer = await asyncio.wait_for(asyncio.open_unix_connection(path), 1)
+        writer.write((json.dumps({"command": command}) + "\n").encode())
+        await writer.drain()
+        await asyncio.wait_for(reader.readline(), 1)
+        writer.close()
+    except (OSError, asyncio.TimeoutError):
+        pass
+
+
 def _available_mb():
     try:
         with open("/proc/meminfo") as f:
@@ -51,7 +62,7 @@ class AppSpec:
     timeout to at least N seconds, None leaves it to the setting."""
 
     def __init__(self, key, title_key, argv, needs=None, pauses_music=False, env=None, setup=None,
-                 awake=None):
+                 awake=None, control=None):
         self.key = key
         self.title_key = title_key
         self.argv = argv
@@ -60,6 +71,7 @@ class AppSpec:
         self.env = env or {}
         self.setup = setup
         self.awake = awake
+        self.control = control  # mpv's JSON IPC socket, to pause it when headphones go
 
     def available(self):
         return self.needs is None or _first_existing(*self.needs) is not None
@@ -95,7 +107,7 @@ def prepare_koreader(data_dir, lang):
         log.warning("could not prepare KOReader: %s", e)
 
 
-def catalog(data_dir, lang=lambda: "ko", sim=False):
+def catalog(data_dir, lang=lambda: "ko", sim=False, run_dir="/run/aleph"):
     koreader = _first_existing("/usr/bin/koreader", "/storage/koreader/koreader.sh")
     portmaster = _first_existing("/usr/bin/start_portmaster.sh")
     if sim:
@@ -109,8 +121,9 @@ def catalog(data_dir, lang=lambda: "ko", sim=False):
                               needs=[portmaster]),
         "retroarch": AppSpec("retroarch", "RetroArch", ["retroarch"], needs=["retroarch"],
                              pauses_music=True),
-        "video": AppSpec("video", "videos", ["mpv", f"--config-dir={data_dir}/mpv"],
-                         needs=["mpv"], pauses_music=True, awake=0),
+        "video": AppSpec("video", "videos", ["mpv", f"--config-dir={data_dir}/mpv",
+                                             f"--input-ipc-server={run_dir}/mpv.sock"],
+                         needs=["mpv"], pauses_music=True, awake=0, control=f"{run_dir}/mpv.sock"),
     }
     if sim:
         for spec in specs.values():
@@ -168,6 +181,12 @@ class Apps:
         app = self.running.get(self.front)
         return app["awake"] if app else None
 
+    async def pause_media(self):
+        """Pause a playing video. One frozen in the background is silent and stays as it is."""
+        for app in list(self.running.values()):
+            if app["control"] and not app["frozen"] and not self.sim:
+                await _mpv(app["control"], ["set_property", "pause", True])
+
     async def _signal(self, app, verb):
         if self.runner == "direct":
             self._group(app, signal.SIGSTOP if verb == "freeze" else signal.SIGCONT)
@@ -219,7 +238,7 @@ class Apps:
                "SDL_APP_ID": app_id}
         self.running[spec.key] = {"title": title, "unit": unit, "workspace": workspace, "frozen": False,
                                   "app_id": app_id, "media": spec.pauses_music, "args": list(extra_args),
-                                  "awake": spec.awake, "used_at": time.monotonic()}
+                                  "awake": spec.awake, "control": spec.control, "used_at": time.monotonic()}
         if self.sim:
             log.info("sim: launch %s", argv)
         elif self.runner == "direct":

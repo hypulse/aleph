@@ -27,8 +27,10 @@ replaces the front end with a small shell built around your music.
   last week stays. Change the feeds in `/storage/.config/aleph/news-feeds.txt`, one
   `Name | URL` per line.
 - **Games**: PortMaster and the ports it installs.
-- **Bluetooth** headphones connect from one list, in Settings or the Control Center. If
-  they drop, the music pauses instead of carrying on through the speaker.
+- **Bluetooth** headphones connect from one list, in Settings or the Control Center.
+- **Headphones**, wired or Bluetooth, take the sound when they arrive; with both, the one
+  connected last plays. Unplugging or losing the one in use pauses music and videos before
+  a note reaches the speaker, and each output keeps its own volume, never above the limit.
 - **Wi-Fi** remembers every network you join.
 - **Multitasking**: each app keeps its place. Home pauses it where it is, and the home
   screen lists it so you can pick it up again. Up to three apps stay open; when memory
@@ -42,8 +44,9 @@ replaces the front end with a small shell built around your music.
 The last iPod classic, brought forward. Menus split in two: the list on the left, and on
 the right a panel where album art drifts slowly across, or the song playing, or a colour and
 a glyph for the section you are on. Cover Flow turns the albums in 3D over a black floor
-with their reflections; press A and the album flips over to show its songs. Artwork has
-softly rounded corners, and type is set in Pretendard.
+with their reflections, each side turned to face the middle; press A and the album flips
+over to show its songs. Artwork stays square, as the covers are, and type is set in
+Pretendard.
 
 ## The rules
 

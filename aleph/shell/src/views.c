@@ -89,7 +89,7 @@ static void draw_row(Page *p, int i, int x, int y, int w, bool selected)
 
     if (p->art_rows) {
         const char *fallback = !SDL_strncmp(p->path, "/radio", 6) ? "art-radio" : "art-default";
-        draw_image(it->art, fallback, left, y + (h - ART_THUMB) / 2, ART_THUMB, ART_RADIUS);
+        draw_image(it->art, fallback, left, y + (h - ART_THUMB) / 2, ART_THUMB, 0);
         left += ART_THUMB + 14;
     } else if (it->icon) {
         const char *name = device_icon(it->icon);
@@ -275,8 +275,8 @@ static void draw_nowplaying(int x)
     const int art = 272, ax = x + 36, ay = CONTENT_Y + 40;
     const char *fallback = radio ? "art-radio" : "art-default";
     for (int s = 2; s >= 1; s--)
-        fill_round(ax - s * 3, ay - s * 3 + 8, art + s * 6, art + s * 6, 12 + s * 3, RGBA(0, 0, 0, 9));
-    draw_image(pl->art, fallback, ax, ay, art, 12);
+        fill_rect(ax - s * 3, ay - s * 3 + 8, art + s * 6, art + s * 6, RGBA(0, 0, 0, 9));
+    draw_image(pl->art, fallback, ax, ay, art, 0);
 
     int tx = ax + art + 28, tw = x + SCREEN_W - 30 - tx;
     int title_lines = text_width(FONT_BOLD, FONT_NP_TITLE, pl->title) > tw ? 2 : 1;
@@ -522,11 +522,11 @@ static void draw_preview(Page *p, int x)
 /* cover flow ------------------------------------------------------------- */
 
 #define CF_STRIPS 12
-#define CF_ANGLE 1.0472f
-#define CF_GAP 176.0f
-#define CF_STEP 52.0f
-#define CF_DEPTH 120.0f
-#define CF_FOCAL 540.0f
+#define CF_ANGLE 1.2915f /* 74 degrees */
+#define CF_GAP 200.0f
+#define CF_STEP 30.0f
+#define CF_DEPTH 160.0f
+#define CF_FOCAL 900.0f
 #define CF_FLIP_MS 440
 #define CF_TOP (CONTENT_Y + 28)
 
@@ -555,17 +555,19 @@ static void cf_quad(SDL_Texture *t, float cx, float cy, float x, float z, float 
     }
 }
 
+/* Covers at the sides turn to face the middle: the edge nearer the centre falls back, so
+ * each one tucks behind its inner neighbour and none reaches the cover in front. */
 static void cf_place(float d, float *x, float *z, float *angle)
 {
     float ad = fabsf(d), sg = d < 0 ? -1.0f : 1.0f;
     if (ad < 1) {
         *x = d * CF_GAP;
         *z = ad * CF_DEPTH;
-        *angle = d * CF_ANGLE;
+        *angle = -d * CF_ANGLE;
     } else {
         *x = sg * (CF_GAP + (ad - 1) * CF_STEP);
         *z = CF_DEPTH;
-        *angle = sg * CF_ANGLE;
+        *angle = -sg * CF_ANGLE;
     }
 }
 
@@ -586,7 +588,7 @@ static SDL_Texture *render_card(Page *p)
         return NULL;
     SDL_SetRenderDrawColor(app.renderer, 0, 0, 0, 0);
     SDL_RenderClear(app.renderer);
-    fill_round(0, 0, CARD_W, CARD_H, 14, C_WHITE);
+    fill_rect(0, 0, CARD_W, CARD_H, C_WHITE);
     Item *album = &p->items[p->sel];
     draw_text(FONT_BOLD, FONT_VALUE, album->title, 20, 11, C_TEXT, CARD_W - 40);
     if (album->subtitle)
@@ -643,25 +645,28 @@ static void draw_coverflow(Page *p, int x)
     int lo = (int)floorf(p->cf_pos) - 6, hi = (int)ceilf(p->cf_pos) + 6;
     lo = lo < 0 ? 0 : lo;
     hi = hi >= p->count ? p->count - 1 : hi;
-    /* farthest first, so nearer covers overlap them */
-    for (int ring = 7; ring >= 0; ring--) {
-        for (int side = -1; side <= 1; side += 2) {
-            for (int i = lo; i <= hi; i++) {
-                float d = i - p->cf_pos, ad = fabsf(d);
-                if ((int)ceilf(ad) != ring || (d < 0 ? -1 : 1) != side)
-                    continue;
-                if (p->card && i == p->sel)
-                    continue;
-                float px, pz, pa;
-                cf_place(d, &px, &pz, &pa);
-                float dim = (ad < 1 ? ad * 40 : 40 + (ad - 1) * 14);
-                Uint8 shade = (Uint8)(255 - (dim > 105 ? 105 : dim));
-                Uint8 alpha = (Uint8)(255 * (1 - 0.72f * flip));
-                SDL_Texture *t = image_or(p->items[i].art, "art-default", 256, 6);
-                if (t)
-                    cf_quad(t, cx, cy, px, pz, pa, CF_SIZE, CF_SIZE, shade, alpha, true);
-            }
+    /* farthest from the middle first, so every cover lies over the ones behind it */
+    int order[16], n = 0;
+    for (int i = lo; i <= hi && n < 16; i++)
+        if (!(p->card && i == p->sel))
+            order[n++] = i;
+    for (int a = 1; a < n; a++)
+        for (int b = a; b > 0 && fabsf(order[b] - p->cf_pos) > fabsf(order[b - 1] - p->cf_pos); b--) {
+            int swap = order[b];
+            order[b] = order[b - 1];
+            order[b - 1] = swap;
         }
+    for (int j = 0; j < n; j++) {
+        int i = order[j];
+        float d = i - p->cf_pos, ad = fabsf(d);
+        float px, pz, pa;
+        cf_place(d, &px, &pz, &pa);
+        float dim = (ad < 1 ? ad * 40 : 40 + (ad - 1) * 14);
+        Uint8 shade = (Uint8)(255 - (dim > 105 ? 105 : dim));
+        Uint8 alpha = (Uint8)(255 * (1 - 0.72f * flip));
+        SDL_Texture *t = image_or(p->items[i].art, "art-default", 256, 0);
+        if (t)
+            cf_quad(t, cx, cy, px, pz, pa, CF_SIZE, CF_SIZE, shade, alpha, true);
     }
 
     if (p->card) {
@@ -669,7 +674,7 @@ static void draw_coverflow(Page *p, int x)
         float w = CF_SIZE + (CARD_W - CF_SIZE) * flip, h = CF_SIZE + (CARD_H - CF_SIZE) * flip;
         float fcy = cy + ((CONTENT_Y + CONTENT_H / 2.0f) - cy) * flip;
         if (ang < (float)M_PI / 2) {
-            SDL_Texture *t = image_or(p->items[p->sel].art, "art-default", 256, 6);
+            SDL_Texture *t = image_or(p->items[p->sel].art, "art-default", 256, 0);
             if (t)
                 cf_quad(t, cx, fcy, 0, 0, ang, w, h, 255, 255, flip < 0.02f);
         } else {

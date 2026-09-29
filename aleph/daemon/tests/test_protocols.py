@@ -3,11 +3,12 @@ import json
 import os
 import sys
 import tempfile
+import time
 import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from aleph.audio import _sink  # noqa: E402
+from aleph.audio import Audio, FakeAudio, _sink  # noqa: E402
 from aleph.battery import Battery  # noqa: E402
 from aleph.mpd import MPD, filter_expr, quote, records, values  # noqa: E402
 from aleph.music import Music  # noqa: E402
@@ -19,6 +20,7 @@ from aleph.ebook import (Glossary, annotate_epub, annotate_html, base_forms, fol
 from aleph.i18n import Translator  # noqa: E402
 from aleph.lyrics import parse_lrc  # noqa: E402
 from aleph.power import Power  # noqa: E402
+from aleph.settings import Settings  # noqa: E402
 from aleph.state import State  # noqa: E402
 from aleph.radio import Radio, station_from_api  # noqa: E402
 from aleph.transfer import Transfer, safe_parts  # noqa: E402
@@ -469,6 +471,207 @@ class AudioParsingTest(unittest.TestCase):
                "properties": {"device.api": "bluez5"}}
         self.assertEqual(_sink(raw)["kind"], "bluetooth")
         self.assertEqual(_sink(raw)["level"], 47)
+
+
+class Amp(FakeAudio):
+    """The speaker amplifier needs 100 ms from its route going live before it makes a sound."""
+
+    live_since = None
+
+    def _build(self):
+        super()._build()
+        live = self.default == self.INTERNAL and self.route == "speaker" and not self.routes["speaker"]["muted"]
+        self.live_since = (self.live_since or time.monotonic()) if live else None
+
+    def audible(self):
+        return self.live_since is not None and time.monotonic() - self.live_since >= 0.1
+
+
+class RoutesTest(unittest.IsolatedAsyncioTestCase):
+    """Every way headphones come and go, checked against a model of PipeWire and WirePlumber."""
+
+    async def asyncSetUp(self):
+        self.fake = Amp()
+        self.settings = Settings(tempfile.mkdtemp())
+        self.lost = []
+        self.playing, self.on_speaker, self.leaks = False, False, 0
+
+        async def lost(kind):
+            self.lost.append(kind)
+            self.playing = False
+        self.audio = Audio(self.fake, State(lambda snapshot: None), self.settings, lost=lost)
+        self.audio.SETTLE = 0.02
+        self.watcher = asyncio.get_running_loop().create_task(self.watch())
+
+    async def asyncTearDown(self):
+        self.watcher.cancel()
+
+    async def watch(self):
+        while True:
+            if self.playing and not self.on_speaker and self.fake.audible():
+                self.leaks += 1
+            await asyncio.sleep(0.005)
+
+    async def start(self, jack=False):
+        self.fake.plug(jack)
+        await self.audio.start()
+        self.audio.jack(jack, initial=True)
+        await self.quiet()
+
+    async def quiet(self):
+        await asyncio.sleep(0.15)
+
+    def play(self, on_speaker=False):
+        self.playing, self.on_speaker = True, on_speaker
+
+    def plug(self, inserted):
+        self.fake.plug(inserted)  # WirePlumber is as quick as aleph, or quicker
+        self.audio.jack(inserted)
+
+    def internal_muted(self):
+        return self.fake.routes[self.fake.route]["muted"]
+
+    async def test_headphones_in_keeps_playing_there(self):
+        await self.start()
+        self.play(on_speaker=True)
+        self.plug(True)
+        await self.quiet()
+        self.on_speaker = False
+        self.assertEqual((self.audio.output, self.fake.route, self.lost), ("wired", "headphones", []))
+        self.assertFalse(self.internal_muted())
+
+    async def test_headphones_out_pause_before_the_speaker_sounds(self):
+        await self.start(jack=True)
+        self.play()
+        self.plug(False)
+        await self.quiet()
+        self.assertEqual(self.lost, ["wired"])
+        self.assertEqual(self.leaks, 0)
+        self.assertEqual((self.audio.output, self.fake.route), ("speaker", "speaker"))
+        self.assertFalse(self.internal_muted(), "the speaker speaks again once paused")
+
+    async def test_bluetooth_takes_over_and_parks_the_speaker(self):
+        await self.start()
+        self.play(on_speaker=True)
+        self.fake.add_bluetooth("AirPods", "AA:BB:CC:DD:EE:01")
+        await self.quiet()
+        self.assertEqual(self.audio.output, self.fake.default)
+        self.assertTrue(self.fake.routes["speaker"]["muted"])
+        self.assertEqual(self.lost, [])
+
+    async def test_bluetooth_dropout_pauses_in_silence(self):
+        await self.start()
+        self.fake.add_bluetooth("AirPods", "AA:BB:CC:DD:EE:01")
+        await self.quiet()
+        self.play()
+        self.audio.bluetooth_lost("AA:BB:CC:DD:EE:01")
+        self.fake.remove_bluetooth("AA:BB:CC:DD:EE:01")
+        await self.quiet()
+        self.assertEqual((self.lost, self.leaks), (["bluetooth"], 0))
+        self.assertEqual((self.audio.output, self.fake.default), ("speaker", FakeAudio.INTERNAL))
+        self.assertFalse(self.internal_muted())
+
+    async def test_bluetooth_gone_before_it_settled_is_silent_too(self):
+        await self.start()
+        self.play(on_speaker=True)
+        self.fake.add_bluetooth("AirPods", "AA:BB:CC:DD:EE:01")
+        await asyncio.sleep(0.005)
+        self.audio.output = self.fake.default  # it already played there
+        self.on_speaker = False
+        self.fake.remove_bluetooth("AA:BB:CC:DD:EE:01")
+        await self.quiet()
+        self.assertEqual((self.lost, self.leaks), (["bluetooth"], 0))
+        self.assertFalse(self.internal_muted())
+
+    async def test_a_sink_gone_without_word_from_bluez_still_pauses(self):
+        await self.start()
+        self.fake.add_bluetooth("JBL Flip 6", "AA:BB:CC:DD:EE:02")
+        await self.quiet()
+        self.play()
+        self.fake.remove_bluetooth()
+        await self.quiet()
+        self.assertEqual((self.lost, self.leaks), (["bluetooth"], 0))
+
+    async def test_the_output_connected_last_plays(self):
+        await self.start()
+        self.fake.add_bluetooth("AirPods", "AA:BB:CC:DD:EE:01")
+        await self.quiet()
+        self.play()
+        self.plug(True)
+        await self.quiet()
+        self.assertEqual((self.audio.output, self.fake.default, self.fake.route),
+                         ("wired", FakeAudio.INTERNAL, "headphones"))
+        self.assertFalse(self.internal_muted())
+        self.plug(False)
+        await self.quiet()
+        self.assertEqual(self.lost, ["wired"])
+        self.assertEqual(self.audio.output, self.fake.default, "back to the Bluetooth still connected")
+        self.assertTrue(self.fake.routes["speaker"]["muted"], "parked again behind Bluetooth")
+        self.assertEqual(self.leaks, 0)
+
+    async def test_a_dropout_elsewhere_changes_nothing(self):
+        await self.start()
+        self.fake.add_bluetooth("AirPods", "AA:BB:CC:DD:EE:01")
+        await self.quiet()
+        self.plug(True)
+        await self.quiet()
+        self.play()
+        self.audio.bluetooth_lost("AA:BB:CC:DD:EE:01")
+        self.fake.remove_bluetooth("AA:BB:CC:DD:EE:01")
+        await self.quiet()
+        self.assertEqual((self.lost, self.audio.output), ([], "wired"))
+
+    async def test_losing_both_at_once_pauses_once(self):
+        await self.start()
+        self.fake.add_bluetooth("AirPods", "AA:BB:CC:DD:EE:01")
+        await self.quiet()
+        self.plug(True)
+        await self.quiet()
+        self.play()
+        self.plug(False)
+        self.audio.bluetooth_lost("AA:BB:CC:DD:EE:01")
+        self.fake.remove_bluetooth("AA:BB:CC:DD:EE:01")
+        await self.quiet()
+        self.assertEqual((self.lost, self.leaks), (["wired"], 0))
+        self.assertEqual((self.audio.output, self.fake.route), ("speaker", "speaker"))
+        self.assertFalse(self.internal_muted())
+
+    async def test_a_bouncing_plug_settles_where_it_ends(self):
+        await self.start(jack=True)
+        self.play()
+        for inserted in (False, True, False, True, False):
+            self.plug(inserted)
+            await asyncio.sleep(0.01)
+        await self.quiet()
+        self.assertIn("wired", self.lost)
+        self.assertEqual(self.leaks, 0)
+        self.assertEqual((self.audio.output, self.fake.route), ("speaker", "speaker"))
+        self.assertFalse(self.internal_muted())
+        self.plug(True)
+        await self.quiet()
+        self.assertFalse(self.internal_muted(), "headphones never come back muted")
+
+    async def test_start_lifts_a_mute_left_behind(self):
+        self.fake.routes["speaker"]["muted"] = True
+        await self.start()
+        self.assertFalse(self.internal_muted())
+
+    async def test_each_output_keeps_its_level_within_the_limit(self):
+        self.settings.set("volumes", {"speaker": 30, "wired": 90})
+        self.settings.set("volume_limit", 60)
+        self.audio = Audio(self.fake, State(lambda snapshot: None), self.settings)
+        self.audio.SETTLE = 0.02
+        await self.start()
+        self.plug(True)
+        await self.quiet()
+        self.assertEqual(self.fake.routes["headphones"]["level"], 60)
+        await self.audio.change(-5)
+        self.plug(False)
+        await self.quiet()
+        self.assertEqual(self.fake.routes["speaker"]["level"], 30)
+        self.plug(True)
+        await self.quiet()
+        self.assertEqual(self.fake.routes["headphones"]["level"], 55)
 
 
 class RadioTest(unittest.IsolatedAsyncioTestCase):
