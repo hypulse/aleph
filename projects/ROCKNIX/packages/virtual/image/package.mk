@@ -15,7 +15,7 @@ PKG_DEPENDS_TARGET="toolchain squashfs-tools:host dosfstools:host fakeroot:host 
                     bash coreutils system-utils autostart quirks powerstate sdl2notify \
                     gzip six xmlstarlet pyudev dialog network mako-osd rocknix"
 
-PKG_UI=""
+PKG_UI="aleph"
 
 PKG_UI_TOOLS="grim"
 

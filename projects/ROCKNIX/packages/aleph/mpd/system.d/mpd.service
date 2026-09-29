@@ -1,0 +1,15 @@
+[Unit]
+Description=Music Player Daemon
+After=pipewire-pulse.service
+Wants=pipewire-pulse.service
+
+[Service]
+Type=notify
+Environment=XDG_RUNTIME_DIR=/var/run/0-runtime-dir
+RuntimeDirectory=mpd
+ExecStartPre=/bin/mkdir -p /storage/music /storage/.cache/mpd /storage/.config/mpd/playlists
+ExecStart=/usr/bin/mpd --systemd /etc/mpd.conf
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

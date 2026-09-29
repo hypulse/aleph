@@ -1,0 +1,14 @@
+#!/bin/bash
+# SPDX-License-Identifier: GPL-2.0-or-later
+# Copyright (C) 2026-present aleph (https://github.com/hypulse/aleph)
+
+# Runs after 111-sway-init has rewritten the sway config: add aleph's window
+# rules and make the shell the UI that autostart launches.
+
+SWAY_CONFIG=/storage/.config/sway/config
+if [ -f "${SWAY_CONFIG}" ] && ! grep -q "/usr/share/aleph/sway.conf" "${SWAY_CONFIG}"; then
+  echo "include /usr/share/aleph/sway.conf" >>"${SWAY_CONFIG}"
+fi
+
+mkdir -p /storage/.config/profile.d /storage/music /storage/videos /storage/books
+echo 'UI_SERVICE="sway.service aleph-shell.service"' >/storage/.config/profile.d/099-aleph
