@@ -10,5 +10,18 @@ if [ -f "${SWAY_CONFIG}" ] && ! grep -q "/usr/share/aleph/sway.conf" "${SWAY_CON
   echo "include /usr/share/aleph/sway.conf" >>"${SWAY_CONFIG}"
 fi
 
-mkdir -p /storage/.config/profile.d /storage/music /storage/videos /storage/books
+mkdir -p /storage/.config/profile.d
 echo 'UI_SERVICE="sway.service aleph-shell.service"' >/storage/.config/profile.d/099-aleph
+
+# Media lives in /storage; a second microSD card, which a computer can read, shows up
+# inside each library as its own folder.
+CARD=/storage/games-external
+for KIND in music videos books; do
+  mkdir -p "/storage/${KIND}"
+  LINK="/storage/${KIND}/SD Card"
+  if grep -qs " ${CARD} " /proc/mounts && mkdir -p "${CARD}/${KIND}" 2>/dev/null; then
+    [ -L "${LINK}" ] || ln -sfn "${CARD}/${KIND}" "${LINK}"
+  elif [ -L "${LINK}" ]; then
+    rm -f "${LINK}"
+  fi
+done

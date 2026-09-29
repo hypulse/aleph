@@ -75,8 +75,10 @@ The recipes that put these in the image are in `projects/ROCKNIX/packages/aleph`
 2. Write the `.img.gz` to a microSD card with balenaEtcher or Raspberry Pi Imager.
 3. On the card's `ALEPH` partition, copy `device_trees/sun50i-h700-anbernic-rg35xx-sp.dtb`
    to the root of the partition and rename it `dtb.img`.
-4. Boot, then copy music, videos and books into `music`, `videos` and `books` on the
-   storage partition.
+4. Put music, videos and books in `music`, `videos` and `books` folders on a second
+   microSD card (exFAT works with any computer) and insert it in the other slot. aleph
+   creates the folders on first boot and shows the card as an `SD Card` folder in each
+   library.
 
 ## Build
 
