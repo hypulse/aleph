@@ -15,15 +15,28 @@ class Backlight:
 
     def __init__(self, root="/sys/class/backlight"):
         self.path = None
+        self.power_path = None
         self.max = 1
         for dev in sorted(glob.glob(os.path.join(root, "*"))):
             try:
                 with open(os.path.join(dev, "max_brightness")) as f:
                     self.max = max(1, int(f.read()))
                 self.path = os.path.join(dev, "brightness")
+                if os.path.exists(os.path.join(dev, "bl_power")):
+                    self.power_path = os.path.join(dev, "bl_power")
                 break
             except (OSError, ValueError):
                 continue
+
+    def set_power(self, on):
+        """bl_power 4 powers the backlight down, the way ROCKNIX darkens the screen."""
+        if not self.power_path:
+            return
+        try:
+            with open(self.power_path, "w") as f:
+                f.write("0" if on else "4")
+        except OSError as e:
+            log.warning("backlight power: %s", e)
 
     def set_percent(self, percent):
         if not self.path:
@@ -63,6 +76,7 @@ class Inhibitor:
 class Power:
     LONG_PRESS = 1.2
     LID_SLEEP = 30
+    SETTLE = 2.0
 
     def __init__(self, state, settings, events, sim=False):
         self.state = state
@@ -81,6 +95,8 @@ class Power:
         self._poke = asyncio.Event()
         self._sleep_timer = None
         self.sleep_timer_at = None
+        self._lit_at = 0.0
+        self._suspended = False
 
     async def start(self):
         if not self.sim:
@@ -105,11 +121,16 @@ class Power:
             return
         self.state.update("screen", on=on)
         self.screen_off_at = None if on else time.monotonic()
-        if not self.sim:
-            await run("swaymsg", "output", "*", "power", "on" if on else "off")
-        self.backlight.set_percent(self.settings["brightness"] if on else 0)
+        # Only the backlight goes dark; the panel keeps its mode, as it does under ROCKNIX.
         if on:
-            self.last_activity = time.monotonic()
+            self.backlight.set_power(True)
+            self.backlight.set_percent(self.settings["brightness"])
+            self.last_activity = self._lit_at = time.monotonic()
+            self._suspended = False
+        else:
+            self.backlight.set_percent(0)
+            self.backlight.set_power(False)
+        self.events.screen_changed(on)
         self.poke()
 
     def activity(self):
@@ -139,10 +160,12 @@ class Power:
             await self.set_screen(True)
 
     async def power_key(self, pressed):
+        if self.lid_closed:
+            return
         if pressed:
             self._power_down_at = time.monotonic()
             self._long_press = asyncio.get_running_loop().call_later(
-                self.LONG_PRESS, self.events.power_menu)
+                self.LONG_PRESS, lambda: spawn(self._power_menu()))
             return
         if self._long_press:
             self._long_press.cancel()
@@ -151,17 +174,27 @@ class Power:
         self._power_down_at = None
         if held >= self.LONG_PRESS:
             return
-        if self.screen_on:
+        # The press that wakes the device, or one that lands just after the lid opened,
+        # means "on"; only a deliberate press on a lit screen turns it off.
+        settling = time.monotonic() - self._lit_at < self.SETTLE
+        if self.screen_on and not self._suspended and not settling:
             await self.set_screen(False)
         else:
             await self.set_screen(True)
+
+    async def _power_menu(self):
+        if self.lid_closed:
+            return
+        await self.set_screen(True)
+        self.events.power_menu()
 
     def poke(self):
         self._poke.set()
 
     def _screen_deadline(self):
-        if self.screen_on and self.settings["screen_timeout"]:
-            return self.last_activity + self.settings["screen_timeout"]
+        timeout = self.events.screen_timeout(self.settings["screen_timeout"])
+        if self.screen_on and timeout:
+            return self.last_activity + timeout
         return None
 
     def _sleep_deadline(self):
@@ -216,6 +249,7 @@ class Power:
         # countdown restarts so a wake that nobody follows up sleeps again later.
         await self.set_screen(False)
         self.screen_off_at = time.monotonic()
+        self._suspended = True
         if self.sim:
             log.info("sim: suspend")
             return

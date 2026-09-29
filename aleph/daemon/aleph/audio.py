@@ -120,14 +120,17 @@ class FakeAudio:
 class Audio:
     STEP = 5
 
-    def __init__(self, backend, state, settings):
+    def __init__(self, backend, state, settings, remember=None):
         self.backend = backend
         self.state = state
         self.settings = settings
+        self.remember = remember
         self.parked = set()
+        self._save = None
 
     async def start(self):
         await self.backend.start(self._publish)
+        await self.clamp_to_limit()
 
     def _publish(self):
         sink = self.backend.current()
@@ -143,6 +146,11 @@ class Audio:
         level = max(0, min(limit, sink["level"] + delta))
         if level != sink["level"]:
             await self.backend.set_volume(sink["name"], level)
+            if sink["kind"] in ("speaker", "headphones") and self.remember:
+                # ROCKNIX restores this at boot; Bluetooth devices keep their own level.
+                if self._save:
+                    self._save.cancel()
+                self._save = asyncio.get_running_loop().call_later(1.5, self.remember, level)
         return level
 
     async def clamp_to_limit(self):

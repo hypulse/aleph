@@ -162,7 +162,7 @@ class Pages:
         if key == "nowplaying":
             return {"nowplaying": True}
         if key.startswith("app:"):
-            await self.app.apps.resume(key[4:])
+            await self.app.resume_app(key[4:])
             return {"none": True}
         return {"push": "/" + key}
 
@@ -546,7 +546,7 @@ class Pages:
         file = os.path.join(self._media_dir("books", rest), key[2:])
         apps = self.app.apps
         if apps.opened_file("koreader") == file:
-            await apps.resume("koreader")
+            await self.app.resume_app("koreader")
         else:
             await self.app.launch(self.app.catalog["koreader"], _strip_ext(key[2:], BOOK_EXTS), [file])
 
@@ -718,6 +718,7 @@ class Pages:
             ("capacity", human_size(info["capacity"])),
             ("available", human_size(info["available"])),
             ("battery", f"{battery['percent']}%"),
+            ("boot_time", t("seconds_short", n=f"{self.app.ui_ready_at:.1f}") if self.app.ui_ready_at else "—"),
             ("ip_address", info["ip"] or "—"),
             ("bt_address", self.app.bluetooth.backend.address or "—"),
             ("model", info["model"]),

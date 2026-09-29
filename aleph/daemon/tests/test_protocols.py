@@ -11,7 +11,10 @@ from aleph.audio import _sink  # noqa: E402
 from aleph.battery import Battery  # noqa: E402
 from aleph.mpd import MPD, filter_expr, quote, records, values  # noqa: E402
 from aleph.pages import BOOK_EXTS, folder_listing  # noqa: E402
+from aleph.apps import AppSpec, Apps  # noqa: E402
 from aleph.i18n import Translator  # noqa: E402
+from aleph.power import Power  # noqa: E402
+from aleph.state import State  # noqa: E402
 from aleph.radio import Radio, station_from_api  # noqa: E402
 from aleph.transfer import Transfer, safe_parts  # noqa: E402
 from aleph.util import enc, fmt_duration, index_letter, matches, sort_key, split_path  # noqa: E402
@@ -190,6 +193,98 @@ class TransferTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(safe_parts("a/b%20c/d.mp3"), ["a", "b c", "d.mp3"])
         self.assertIsNone(safe_parts("../x.mp3"))
         self.assertIsNone(safe_parts(".hidden/x.mp3"))
+
+
+class FakeEvents:
+    def __init__(self):
+        self.slept = 0
+        self.menus = 0
+        self.screens = []
+        self.hold = None
+
+    def screen_changed(self, on):
+        self.screens.append(on)
+
+    def screen_timeout(self, setting):
+        return setting if self.hold is None else self.hold
+
+    def before_sleep(self):
+        self.slept += 1
+
+    def power_menu(self):
+        self.menus += 1
+
+    def page_changed(self, *paths):
+        pass
+
+    def foreground_changed(self):
+        pass
+
+    def app_failed(self, title):
+        pass
+
+
+class PowerLidTest(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        self.state = State(lambda snap: None)
+        self.events = FakeEvents()
+        settings = {"brightness": 70, "screen_timeout": 60, "sleep_timeout": 600, "lid_keep_playing": True}
+        self.power = Power(self.state, settings, self.events, sim=True)
+
+    async def press(self):
+        await self.power.power_key(True)
+        await self.power.power_key(False)
+
+    async def test_lid_sleeps_when_silent_and_wakes_on_open(self):
+        await self.power.lid(True)
+        self.assertEqual((self.power.screen_on, self.events.slept), (False, 1))
+        await self.press()
+        self.assertFalse(self.power.screen_on, "the power key does nothing while the lid is shut")
+        await self.power.lid(False)
+        self.assertTrue(self.power.screen_on)
+        await self.press()
+        self.assertTrue(self.power.screen_on, "a press right after opening the lid must not darken it")
+
+    async def test_music_keeps_playing_with_lid_shut(self):
+        self.state.update("player", state="play")
+        await self.power.lid(True)
+        self.assertEqual((self.power.screen_on, self.events.slept), (False, 0))
+
+    async def test_wake_press_after_sleep_turns_screen_on(self):
+        await self.power.sleep()
+        self.assertFalse(self.power.screen_on)
+        await self.press()
+        self.assertTrue(self.power.screen_on)
+        self.power._lit_at -= 5
+        await self.press()
+        self.assertFalse(self.power.screen_on, "a later press turns the screen off")
+
+    async def test_front_app_can_hold_the_screen(self):
+        self.assertIsNotNone(self.power._screen_deadline())
+        self.events.hold = 0
+        self.assertIsNone(self.power._screen_deadline())
+
+
+class AppsTest(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        self.apps = Apps(State(lambda snap: None), FakeEvents(), {}, sim=True)
+
+    async def test_dark_freezes_front_and_old_apps_make_room(self):
+        spec = lambda key: AppSpec(key, key, [key])  # noqa: E731
+        for key in ("a", "b"):
+            await self.apps.launch(spec(key), key)
+            await self.apps.home()
+        await self.apps.resume("a")
+        await self.apps.set_dark(True)
+        self.assertTrue(self.apps.running["a"]["frozen"])
+        await self.apps.set_dark(False)
+        self.assertFalse(self.apps.running["a"]["frozen"])
+        await self.apps.home()
+        await self.apps.launch(spec("c"), "c")
+        self.assertEqual(sorted(self.apps.running), ["a", "b", "c"])
+        await self.apps.home()
+        await self.apps.launch(spec("d"), "d")
+        self.assertNotIn("b", self.apps.running, "the app used longest ago closes first")
 
 
 class WifiParsingTest(unittest.TestCase):

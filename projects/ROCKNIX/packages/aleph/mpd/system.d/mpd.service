@@ -10,6 +10,7 @@ RuntimeDirectory=mpd
 ExecStartPre=/bin/mkdir -p /storage/music /storage/.cache/mpd /storage/.config/mpd/playlists
 ExecStart=/usr/bin/mpd --systemd /etc/mpd.conf
 Restart=on-failure
+OOMScoreAdjust=-800
 
 [Install]
 WantedBy=multi-user.target

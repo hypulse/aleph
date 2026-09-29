@@ -45,7 +45,8 @@ class App:
         self.bluetooth = Bluetooth(FakeBackend() if self.sim else RavelBackend(),
                                    self.state, self.settings, self.t, self, self.system)
         self.wifi = Wifi(FakeWifi() if self.sim else Nmcli(), self.state, self.t, self)
-        self.audio = Audio(FakeAudio() if self.sim else Pactl(), self.state, self.settings)
+        self.audio = Audio(FakeAudio() if self.sim else Pactl(), self.state, self.settings,
+                           remember=lambda level: spawn(self.system.rocknix_setting("audio.volume", level)))
         self.power = Power(self.state, self.settings, self, sim=self.sim)
         self.battery = Battery(self.state, notify=self._battery_low, sim=self.sim)
         self.apps = Apps(self.state, self, {k: v for k, v in os.environ.items() if k in APP_ENV_KEYS},
@@ -55,6 +56,7 @@ class App:
         self.transfer = Transfer(self, VIDEO_EXTS, BOOK_EXTS)
         self.input = None if self.sim else Input(self)
         self._last_player_state = "stop"
+        self.ui_ready_at = None
         self._page_paths = set()
         self._page_flush = None
 
@@ -71,9 +73,14 @@ class App:
         if self.input:
             await self.input.start()
         if await self.music.wait_ready():
-            await self.music.update_library()
+            spawn(self._rescan_later())
         log.info("aleph %s ready", __version__)
         await asyncio.Event().wait()
+
+    async def _rescan_later(self, delay=10):
+        """Pick up files copied while the device was off, once boot has settled."""
+        await asyncio.sleep(delay)
+        await self.music.update_library()
 
     # state and events --------------------------------------------------------
 
@@ -123,10 +130,28 @@ class App:
             self.audio.backend.remove_bluetooth()
         await self.audio.unpark_speaker()
 
-    def foreground_changed(self):
+    def _update_exclusive(self):
+        """The gamepad belongs to the app in front only while the screen is lit."""
         if self.input:
-            self.input.set_exclusive(self.apps.front is None)
+            self.input.set_exclusive(self.apps.front is None or not self.power.screen_on)
+
+    def foreground_changed(self):
+        self._update_exclusive()
         self.page_changed("/")
+
+    def screen_changed(self, on):
+        self._update_exclusive()
+        spawn(self.apps.set_dark(not on))
+
+    def screen_timeout(self, setting):
+        """Seconds of quiet before the screen goes dark; 0 means never."""
+        hold = self.apps.front_awake()
+        if hold is None or not setting:
+            return setting
+        return 0 if hold == 0 else max(setting, hold)
+
+    def app_failed(self, title):
+        self.toast(self.t("app_failed", name=title))
 
     def power_menu(self):
         t = self.t
@@ -155,6 +180,11 @@ class App:
         if spec.pauses_music:
             await self.music.pause()
         await self.apps.launch(spec, title, args)
+
+    async def resume_app(self, key):
+        if self.apps.is_media(key):
+            await self.music.pause()
+        await self.apps.resume(key)
 
     # input routing -----------------------------------------------------------
 
@@ -218,6 +248,9 @@ class App:
         op = req.get("op")
         path = req.get("path", "/")
         if op == "hello":
+            if self.ui_ready_at is None:
+                self.ui_ready_at = self.system.uptime()
+                log.info("shell connected %.1f s after the kernel started", self.ui_ready_at or 0)
             return {"state": self.state.snapshot(), "strings": self.t.shell_strings(),
                     "lang": self.t.lang, "version": __version__}
         if op == "page":

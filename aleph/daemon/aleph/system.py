@@ -27,6 +27,9 @@ class System:
         else:
             await self.rocknix_setting("controllers.bluetooth.enabled", 1 if on else 0)
 
+    def uptime(self):
+        return _uptime()
+
     def about(self, music_dir):
         info = {"version": __version__, "model": "Anbernic RG35XX SP", "software": ""}
         try:
@@ -45,6 +48,14 @@ class System:
         info["capacity"], info["available"] = usage.total, usage.free
         info["ip"] = _local_ip()
         return info
+
+
+def _uptime():
+    try:
+        with open("/proc/uptime") as f:
+            return float(f.read().split()[0])
+    except (OSError, ValueError, IndexError):
+        return None
 
 
 def _local_ip():

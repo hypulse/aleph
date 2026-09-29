@@ -98,6 +98,7 @@ STRINGS = {
     "opening": ("여는 중…", "Opening…"),
     "ports": ("설치한 게임", "Installed Games"),
     "close_app": ("닫기", "Close"),
+    "app_failed": ("{name} 앱을 열 수 없어요", "Couldn’t Open {name}"),
 
     "wifi": ("Wi-Fi", "Wi-Fi"),
     "bluetooth": ("블루투스", "Bluetooth"),
@@ -142,6 +143,8 @@ STRINGS = {
     "screen_timeout": ("화면 자동 꺼짐", "Auto-Lock"),
     "never": ("안 함", "Never"),
     "seconds": ("{n}초", "{n} seconds"),
+    "seconds_short": ("{n}초", "{n} s"),
+    "boot_time": ("부팅 시간", "Boot Time"),
     "minutes": ("{n}분", "{n} minutes"),
     "when_lid_closes": ("뚜껑을 닫으면", "When Lid Closes"),
     "lid_keep": ("음악은 계속 재생", "Keep Playing Music"),

@@ -17,9 +17,12 @@ makeinstall_target() {
   cp -r ${ROOT}/aleph/system/mpv ${INSTALL}/usr/share/aleph/
   cp -r ${ROOT}/aleph/system/koreader ${INSTALL}/usr/share/aleph/
 
-  # alephd reads the buttons, the lid and the power key itself.
+  # alephd reads the buttons, the lid and the power key itself, and aleph reports
+  # nothing to ROCKNIX's install statistics.
   mkdir -p ${INSTALL}/etc/systemd/system
-  ln -sf /dev/null ${INSTALL}/etc/systemd/system/input.service
+  for UNIT in input.service rocknix-report-stats.service rocknix-report-stats.timer; do
+    ln -sf /dev/null ${INSTALL}/etc/systemd/system/${UNIT}
+  done
 }
 
 post_install() {

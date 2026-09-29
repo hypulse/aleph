@@ -13,6 +13,13 @@ fi
 mkdir -p /storage/.config/profile.d
 echo 'UI_SERVICE="sway.service aleph-shell.service"' >/storage/.config/profile.d/099-aleph
 
+# 1 GB fills up once apps wait in the background: compress idle pages instead of
+# losing apps, and skip KSM, which wakes the CPU twice a second for nothing here.
+if [ ! -f /storage/.config/swap.conf ]; then
+  printf 'ZRAM_SIZE="512"\nKSM_ENABLE="disable"\n' >/storage/.config/swap.conf
+  systemctl reload rocknix-memory-manager
+fi
+
 # Media lives in /storage; a second microSD card, which a computer can read, shows up
 # inside each library as its own folder.
 CARD=/storage/games-external
