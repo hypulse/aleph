@@ -13,6 +13,8 @@ from aleph.mpd import MPD, filter_expr, quote, records, values  # noqa: E402
 from aleph.music import Music  # noqa: E402
 from aleph.pages import BOOK_EXTS, folder_listing  # noqa: E402
 from aleph.apps import AppSpec, Apps  # noqa: E402
+from aleph import news  # noqa: E402
+from aleph.ebook import Glossary, annotate_epub, annotate_html, base_forms, write_epub  # noqa: E402
 from aleph.i18n import Translator  # noqa: E402
 from aleph.power import Power  # noqa: E402
 from aleph.state import State  # noqa: E402
@@ -311,6 +313,90 @@ class AppsTest(unittest.IsolatedAsyncioTestCase):
         await self.apps.home()
         await self.apps.launch(spec("d"), "d")
         self.assertNotIn("b", self.apps.running, "the app used longest ago closes first")
+
+
+class WordWiseTest(unittest.TestCase):
+    def glossary(self):
+        d = tempfile.mkdtemp()
+        with open(os.path.join(d, "g.tsv"), "w") as f:
+            f.write("ubiquitous\tpresent everywhere\t34\nscrutinize\tlook at closely\t28\n"
+                    "reluctant\tunwilling\t38\nwhisper\t<speak> softly\t30\n")
+        return Glossary(os.path.join(d, "g.tsv"))
+
+    def test_base_forms_find_the_headword(self):
+        self.assertIn("scrutinize", base_forms("scrutinized"))
+        self.assertIn("scrutinize", base_forms("scrutinizing"))
+        self.assertIn("study", base_forms("studies"))
+
+    def test_hints_once_outside_skipped_tags(self):
+        g = self.glossary()
+        doc = ("<html><head><title>ubiquitous</title></head><body><h1>ubiquitous</h1>"
+               "<p>Phones are ubiquitous; so ubiquitous that we scrutinized them. "
+               "A reluctant Reader. <a href='#'>whisper</a> whispering &nbsp;</p></body></html>")
+        out = annotate_html(doc, g, 35, set())
+        self.assertIn("<title>ubiquitous</title>", out)
+        self.assertIn("<h1>ubiquitous</h1>", out)
+        self.assertEqual(out.count("<rt>present everywhere</rt>"), 1)
+        self.assertIn("<ruby>scrutinized<rt>look at closely</rt></ruby>", out)
+        self.assertNotIn("unwilling", out, "common enough words stay bare")
+        self.assertIn("<a href='#'>whisper</a>", out)
+        self.assertIn("<ruby>whispering<rt>&lt;speak&gt; softly</rt></ruby>", out)
+        self.assertIn("&nbsp;", out)
+
+    def test_epub_round_trip(self):
+        d = tempfile.mkdtemp()
+        src, dst = os.path.join(d, "a.epub"), os.path.join(d, "ww", "a.epub")
+        write_epub(src, "Test", [("One", "<p>It is ubiquitous.</p>")], lang="en")
+        self.assertEqual(annotate_epub(src, dst, self.glossary()), 1)
+        import zipfile
+        with zipfile.ZipFile(dst) as z:
+            self.assertEqual(z.namelist()[0], "mimetype")
+            self.assertEqual(z.getinfo("mimetype").compress_type, zipfile.ZIP_STORED)
+            self.assertIn("<ruby>ubiquitous", z.read("OEBPS/c0.xhtml").decode())
+
+
+RSS = b"""<?xml version="1.0"?><rss version="2.0" xmlns:content="http://purl.org/rss/1.0/modules/content/">
+<channel><title>T</title>
+<item><title>Long story</title><link>http://x/1</link><content:encoded><![CDATA[<p>%s</p><p>Second.</p>]]>
+</content:encoded></item>
+<item><title>Short one</title><link>http://x/2</link><description>Just a teaser.</description></item>
+</channel></rss>""" % (b"Full text. " * 60)
+
+ATOM = b"""<?xml version="1.0"?><feed xmlns="http://www.w3.org/2005/Atom"><title>A</title>
+<entry><title>Atom item</title><link rel="alternate" href="http://y/1"/><summary>Short.</summary></entry></feed>"""
+
+PAGE = ("<html><body><nav><p>Menu menu menu menu menu menu menu</p></nav><div class='a'>"
+        + "".join(f"<p>Paragraph {i} of the article body, long enough to count as text.</p>" for i in range(8))
+        + "</div><footer><p>Copyright footer text that is long enough</p></footer></body></html>").encode()
+
+
+class NewsTest(unittest.TestCase):
+    def test_parse_rss_and_atom(self):
+        rss = news.parse_feed(RSS)
+        self.assertEqual([i["title"] for i in rss], ["Long story", "Short one"])
+        atom = news.parse_feed(ATOM)
+        self.assertEqual((atom[0]["title"], atom[0]["link"]), ("Atom item", "http://y/1"))
+
+    def test_article_page_extraction(self):
+        paragraphs = news.extract_article(PAGE.decode())
+        self.assertEqual(len(paragraphs), 8)
+        self.assertNotIn("Menu", " ".join(paragraphs))
+
+    def test_edition(self):
+        pages = {"http://feed": RSS, "http://x/2": PAGE}
+
+        def fetcher(url, timeout=10):
+            if url not in pages:
+                raise OSError("offline")
+            return pages[url]
+        d = tempfile.mkdtemp()
+        path = os.path.join(d, news.edition_name())
+        self.assertEqual(news.build_edition(path, "News", [("Feed", "http://feed")], fetcher=fetcher), 2)
+        import zipfile
+        with zipfile.ZipFile(path) as z:
+            second = z.read("OEBPS/c1.xhtml").decode()
+        self.assertIn("Paragraph 3 of the article body", second)
+        self.assertEqual(news.editions(d), [news.edition_name()])
 
 
 class WifiParsingTest(unittest.TestCase):

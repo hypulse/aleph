@@ -7,7 +7,7 @@ PKG_LICENSE="GPL-2.0-or-later"
 PKG_SITE="https://github.com/hypulse/aleph"
 PKG_URL=""
 PKG_DEPENDS_TARGET="toolchain alephd aleph-shell mpd pretendard koreader portmaster"
-PKG_NEED_UNPACK="${ROOT}/aleph/system"
+PKG_NEED_UNPACK="${ROOT}/aleph/system ${ROOT}/aleph/data"
 PKG_LONGDESC="aleph: an iPod-inspired, music-first shell with its system services"
 PKG_TOOLCHAIN="manual"
 
@@ -16,6 +16,7 @@ makeinstall_target() {
   cp ${ROOT}/aleph/system/sway.conf ${INSTALL}/usr/share/aleph/
   cp -r ${ROOT}/aleph/system/mpv ${INSTALL}/usr/share/aleph/
   cp -r ${ROOT}/aleph/system/koreader ${INSTALL}/usr/share/aleph/
+  cp -r ${ROOT}/aleph/data/wordwise ${INSTALL}/usr/share/aleph/
 
   # alephd reads the buttons, the lid and the power key itself, and aleph reports
   # nothing to ROCKNIX's install statistics.

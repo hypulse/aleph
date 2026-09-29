@@ -1,10 +1,14 @@
 import asyncio
+import datetime
+import hashlib
 import logging
 import os
 import secrets
 import zlib
 
+from . import news
 from .apps import installed_ports, port_spec
+from .ebook import Glossary, annotate_epub
 from .radio import RadioError
 from .system import human_size
 from .util import enc, sort_key, spawn, split_path
@@ -70,6 +74,9 @@ class Pages:
         self._tokens = {}
         self._stations = {}
         self._art_jobs = set()
+        self._busy_books = set()
+        self._glossaries = {}
+        self._news_job = None
 
     @property
     def t(self):
@@ -554,22 +561,144 @@ class Pages:
             return page(path, t("books"), [], empty=empty("book", t("no_reader_title"), t("no_reader_text")))
         folder = self._media_dir("books", rest)
         dirs, files = folder_listing(folder, BOOK_EXTS)
-        items = [item("d:" + d, d) for d in dirs]
-        items += [item("f:" + f, _strip_ext(f, BOOK_EXTS), "none") for f in files]
-        return page(path, rest[-1] if rest else t("books"), items,
+        items = [] if rest else [item("news", t("news"))]
+        items += [item("d:" + d, d) for d in dirs]
+        items += [item("f:" + f, _strip_ext(f, BOOK_EXTS),
+                       "spinner" if os.path.join(folder, f) in self._busy_books else "none") for f in files]
+        return page(path, rest[-1] if rest else t("books"), items, live=True,
                     empty=empty("book", t("no_books_title"), t("no_books_text")))
 
     async def _do_books(self, path, rest, key):
+        if key == "news":
+            return {"push": "/news"}
         if key.startswith("d:"):
             return {"push": path.rstrip("/") + "/" + enc(key[2:])}
         if not key.startswith("f:"):
             return None
-        file = os.path.join(self._media_dir("books", rest), key[2:])
+        await self.open_book(os.path.join(self._media_dir("books", rest), key[2:]))
+
+    async def open_book(self, file):
         apps = self.app.apps
-        if apps.opened_file("koreader") == file:
+        lang = self.app.settings["wordwise"].get(file)
+        if lang and file.lower().endswith(".epub"):
+            target = self._wordwise_copy(file, lang)
+            if not os.path.exists(target):
+                spawn(self._prepare_wordwise(file, lang, target))
+                return
+            file_to_open = target
+        else:
+            file_to_open = file
+        if apps.opened_file("koreader") == file_to_open:
             await self.app.resume_app("koreader")
         else:
-            await self.app.launch(self.app.catalog["koreader"], _strip_ext(key[2:], BOOK_EXTS), [file])
+            await self.app.launch(self.app.catalog["koreader"], _strip_ext(os.path.basename(file), BOOK_EXTS),
+                                  [file_to_open])
+
+    # word wise ---------------------------------------------------------------
+
+    def _glossary(self, lang):
+        if lang not in self._glossaries:
+            self._glossaries[lang] = Glossary(os.path.join(self.app.paths["data"], "wordwise", f"en-{lang}.tsv"))
+        return self._glossaries[lang]
+
+    def _wordwise_copy(self, file, lang):
+        stamp = f"{file}|{lang}|{os.path.getmtime(file) if os.path.exists(file) else 0}"
+        key = hashlib.sha1(stamp.encode()).hexdigest()[:16]
+        return os.path.join(self.app.paths["cache"], "wordwise", key, os.path.basename(file))
+
+    async def _prepare_wordwise(self, file, lang, target):
+        """Hints go into a copy once; the reader opens the copy from then on."""
+        self._busy_books.add(file)
+        self.app.page_changed("/books/*")
+        try:
+            loop = asyncio.get_running_loop()
+            glossary = await loop.run_in_executor(None, self._glossary, lang)
+            await loop.run_in_executor(None, annotate_epub, file, target, glossary)
+        except Exception as e:
+            log.warning("word wise for %s: %s", file, e)
+            self.app.toast(self.t("wordwise_failed"))
+            return
+        finally:
+            self._busy_books.discard(file)
+            self.app.page_changed("/books/*")
+        await self.open_book(file)
+
+    async def _alt_books(self, path, rest, key):
+        if not key.startswith("f:") or not key.lower().endswith(".epub"):
+            return None
+        file = os.path.join(self._media_dir("books", rest), key[2:])
+        current = self.app.settings["wordwise"].get(file)
+        t = self.t
+        options = [{"key": lang, "title": t(f"wordwise_{lang}"), "value": t("on") if current == lang else None}
+                   for lang in ("ko", "en")]
+        if current:
+            options.append({"key": "off", "title": t("wordwise_off")})
+
+        def choose(choice):
+            chosen = dict(self.app.settings["wordwise"])
+            if choice == "off":
+                chosen.pop(file, None)
+            else:
+                chosen[file] = choice
+            self.app.settings.set("wordwise", chosen)
+            return {"none": True}
+        return {"sheet": {"title": _strip_ext(key[2:], BOOK_EXTS), "items": options, "token": self._token(choose)}}
+
+    # news ----------------------------------------------------------------------
+
+    def _news_dir(self):
+        return os.path.join(self.app.paths["books"], ".news")
+
+    def _edition_label(self, name):
+        try:
+            day = datetime.date.fromisoformat(name[:10])
+        except ValueError:
+            return name
+        return self.t("news_date", m=day.month, d=day.day)
+
+    async def _page_news(self, path, rest):
+        t = self.t
+        folder = self._news_dir()
+        names = news.editions(folder)
+        wifi = bool(self.app.state.get("wifi")["ssid"]) or self.app.sim
+        today = news.edition_name()
+        if wifi and today not in names and self._news_job is None:
+            self._news_job = spawn(self._fetch_news())
+        fetching = self._news_job is not None
+        items = [item("fetch", t("news_fetch"), "spinner" if fetching else "none")]
+        items += [item("e:" + n, self._edition_label(n), "none") for n in names]
+        return page(path, t("news"), items, live=True)
+
+    async def _do_news(self, path, rest, key):
+        if key == "fetch":
+            if not self.app.state.get("wifi")["ssid"] and not self.app.sim:
+                self.app.toast(self.t("transfer_no_wifi"), "wifi")
+            elif self._news_job is None:
+                self._news_job = spawn(self._fetch_news())
+                self.app.page_changed("/news")
+            return None
+        if key.startswith("e:"):
+            await self.app.launch(self.app.catalog["koreader"], self.t("news"),
+                                  [os.path.join(self._news_dir(), key[2:])])
+
+    async def _fetch_news(self):
+        t = self.t
+        folder = self._news_dir()
+        name = news.edition_name()
+        title = t("news_title", date=self._edition_label(name))
+        feeds = news.load_feeds(os.path.join(self.app.paths["config"], "news-feeds.txt"))
+        try:
+            count = await asyncio.get_running_loop().run_in_executor(
+                None, lambda: news.build_edition(os.path.join(folder, name), title, feeds, lang=t.lang))
+            if not count:
+                self.app.toast(t("news_failed"))
+            news.prune(folder)
+        except Exception as e:
+            log.warning("news: %s", e)
+            self.app.toast(t("news_failed"))
+        finally:
+            self._news_job = None
+            self.app.page_changed("/news")
 
     async def _page_games(self, path, rest):
         items = [item("port:" + p, title, "none") for title, p in installed_ports(self.app.paths["ports"])]

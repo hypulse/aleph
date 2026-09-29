@@ -13,6 +13,7 @@ DEFAULTS = {
     "pause_on_disconnect": True,
     "pause_on_unplug": True,
     "recent_bluetooth": [],
+    "wordwise": {},
 }
 
 
