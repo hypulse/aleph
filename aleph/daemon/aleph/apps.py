@@ -17,29 +17,58 @@ def _first_existing(*paths):
 
 
 class AppSpec:
-    def __init__(self, key, title_key, argv, needs=None, pauses_music=False, env=None):
+    def __init__(self, key, title_key, argv, needs=None, pauses_music=False, env=None, setup=None):
         self.key = key
         self.title_key = title_key
         self.argv = argv
         self.needs = needs
         self.pauses_music = pauses_music
         self.env = env or {}
+        self.setup = setup
 
     def available(self):
         return self.needs is None or _first_existing(*self.needs) is not None
 
 
-PORTS_DIR = "/storage/roms/ports"
+KOREADER_HOME = "/storage/.config/koreader"
+KOREADER_DEFAULTS = """-- Written once by aleph; KOReader owns this file from now on.
+return {
+    ["home_dir"] = "/storage/books",
+    ["lastdir"] = "/storage/books",
+    ["language"] = "%s",
+    ["back_in_reader"] = "default",
+    ["back_to_exit"] = "always",
+    ["quickstart_shown_version"] = 999999999,
+}
+"""
 
 
-def catalog(data_dir):
+def prepare_koreader(data_dir, lang):
+    """Install aleph's button layout patch and first-run settings into KOReader's home."""
+    try:
+        patches = os.path.join(KOREADER_HOME, "patches")
+        os.makedirs(patches, exist_ok=True)
+        src = os.path.join(data_dir, "koreader", "patches")
+        for name in os.listdir(src):
+            shutil.copyfile(os.path.join(src, name), os.path.join(patches, name))
+        settings = os.path.join(KOREADER_HOME, "settings.reader.lua")
+        if not os.path.exists(settings):
+            with open(settings, "w") as f:
+                f.write(KOREADER_DEFAULTS % ("ko_KR" if lang == "ko" else "en"))
+    except OSError as e:
+        log.warning("could not prepare KOReader: %s", e)
+
+
+def catalog(data_dir, lang=lambda: "ko", sim=False):
     koreader = _first_existing("/usr/bin/koreader", "/storage/koreader/koreader.sh")
     portmaster = _first_existing("/usr/bin/start_portmaster.sh")
-    return {
-        "koreader": AppSpec("koreader", "books", [koreader, "/storage/books"] if koreader else None,
-                            needs=[koreader],
-                            env={"SDL_FULLSCREEN": "1", "EMULATE_READER_W": "640",
-                                 "EMULATE_READER_H": "480"}),
+    if sim:
+        koreader, portmaster = "koreader", "start_portmaster.sh"
+    specs = {
+        "koreader": AppSpec("koreader", "books", [koreader] if koreader else None, needs=[koreader],
+                            env={"KO_HOME": KOREADER_HOME, "SDL_FULLSCREEN": "1",
+                                 "EMULATE_READER_W": "640", "EMULATE_READER_H": "480"},
+                            setup=lambda: prepare_koreader(data_dir, lang())),
         "portmaster": AppSpec("portmaster", "PortMaster", [portmaster] if portmaster else None,
                               needs=[portmaster]),
         "retroarch": AppSpec("retroarch", "RetroArch", ["retroarch"], needs=["retroarch"],
@@ -47,6 +76,10 @@ def catalog(data_dir):
         "video": AppSpec("video", "videos", ["mpv", f"--config-dir={data_dir}/mpv"],
                          needs=["mpv"], pauses_music=True),
     }
+    if sim:
+        for spec in specs.values():
+            spec.needs = None
+    return specs
 
 
 class Apps:
@@ -64,11 +97,20 @@ class Apps:
         if not self.sim:
             spawn(self._watch_sway())
 
+    @property
+    def front_plays_media(self):
+        app = self.running.get(self.front)
+        return bool(app and app["media"])
+
+    def opened_file(self, key):
+        app = self.running.get(key)
+        return app["args"][0] if app and app["args"] else None
+
     def _publish(self):
         self.state.replace("apps", [
             {"key": key, "title": app["title"], "frozen": app["frozen"], "front": key == self.front}
             for key, app in self.running.items()])
-        self.events.page_changed("/")
+        self.events.page_changed("/", "/books/*", "/games")
 
     def _free_workspace(self):
         used = {app["workspace"] for app in self.running.values()}
@@ -86,13 +128,16 @@ class Apps:
         if argv[0] == "mpv":
             argv.insert(1, f"--wayland-app-id={app_id}")
         env = {**self.env, **spec.env, "SDL_VIDEO_WAYLAND_WMCLASS": app_id, "SDL_VIDEO_X11_WMCLASS": app_id}
-        self.running[spec.key] = {"title": title, "unit": unit, "workspace": workspace,
-                                  "frozen": False, "app_id": app_id}
+        self.running[spec.key] = {"title": title, "unit": unit, "workspace": workspace, "frozen": False,
+                                  "app_id": app_id, "media": spec.pauses_music, "args": list(extra_args)}
         if self.sim:
             log.info("sim: launch %s", argv)
         else:
+            if spec.setup:
+                spec.setup()
+            # Every process gets SIGTERM so readers and games can save before they go.
             cmd = ["systemd-run", f"--unit={unit}", "--collect", "--quiet",
-                   "--property=KillMode=mixed", "--property=TimeoutStopSec=3"]
+                   "--property=TimeoutStopSec=5"]
             cmd += [f"--setenv={k}={v}" for k, v in env.items()]
             code, _, err = await run(*cmd, "--", *argv)
             if code != 0:
@@ -183,13 +228,13 @@ class Apps:
         self._publish()
 
 
-def installed_ports():
+def installed_ports(ports_dir):
     """Launch scripts PortMaster installed, as (title, path)."""
     try:
-        names = sorted(os.listdir(PORTS_DIR), key=str.casefold)
+        names = sorted(os.listdir(ports_dir), key=str.casefold)
     except OSError:
         return []
-    return [(os.path.splitext(n)[0], os.path.join(PORTS_DIR, n)) for n in names
+    return [(os.path.splitext(n)[0], os.path.join(ports_dir, n)) for n in names
             if n.endswith(".sh") and n.lower() != "portmaster.sh"]
 
 

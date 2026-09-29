@@ -32,13 +32,14 @@ class App:
     def __init__(self, args):
         self.sim = args.sim
         self.paths = {"socket": args.socket, "config": args.config, "cache": args.cache,
-                      "music": args.music, "videos": args.videos, "data": args.data}
+                      "music": args.music, "videos": args.videos, "books": args.books,
+                      "ports": args.ports, "data": args.data}
         self.settings = Settings(args.config)
         self.t = Translator(self.settings["lang"])
         self.state = State(self._state_changed)
         self.server = Server(args.socket, self._handle)
         self.system = System(sim=self.sim)
-        self.music = Music(MPD(args.mpd, args.mpd_port), self.state, self.t, args.cache)
+        self.music = Music(MPD(args.mpd, args.mpd_port), self.state, self.t, args.cache, notify=self.toast)
         self.radio = Radio(args.config, args.cache)
         self.bluetooth = Bluetooth(FakeBackend() if self.sim else RavelBackend(),
                                    self.state, self.settings, self.t, self, self.system)
@@ -48,7 +49,7 @@ class App:
         self.battery = Battery(self.state, sim=self.sim)
         self.apps = Apps(self.state, self, {k: v for k, v in os.environ.items() if k in APP_ENV_KEYS},
                          sim=self.sim)
-        self.catalog = catalog(args.data)
+        self.catalog = catalog(args.data, lambda: self.t.lang, sim=self.sim)
         self.pages = Pages(self)
         self.input = None if self.sim else Input(self)
         self._last_player_state = "stop"
@@ -118,6 +119,8 @@ class App:
         await self.audio.unpark_speaker()
 
     def foreground_changed(self):
+        if self.input:
+            self.input.set_exclusive(self.apps.front is None)
         self.page_changed("/")
 
     def power_menu(self):
@@ -177,6 +180,8 @@ class App:
         await self.power.power_key(pressed)
 
     async def media(self, action):
+        if self.apps.front_plays_media:
+            return
         m = self.music
         if action == "toggle":
             await m.toggle()

@@ -15,6 +15,11 @@ makeinstall_target() {
   mkdir -p ${INSTALL}/usr/share/aleph
   cp ${ROOT}/aleph/system/sway.conf ${INSTALL}/usr/share/aleph/
   cp -r ${ROOT}/aleph/system/mpv ${INSTALL}/usr/share/aleph/
+  cp -r ${ROOT}/aleph/system/koreader ${INSTALL}/usr/share/aleph/
+
+  # alephd reads the buttons, the lid and the power key itself.
+  mkdir -p ${INSTALL}/etc/systemd/system
+  ln -sf /dev/null ${INSTALL}/etc/systemd/system/input.service
 }
 
 post_install() {

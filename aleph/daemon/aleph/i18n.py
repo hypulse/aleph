@@ -58,12 +58,16 @@ STRINGS = {
     "remove_favorite": ("즐겨찾기에서 삭제", "Remove from Favorites"),
     "added_favorite": ("즐겨찾기에 추가됨", "Added to Favorites"),
     "removed_favorite": ("즐겨찾기에서 삭제됨", "Removed from Favorites"),
+    "stream_failed": ("방송에 연결할 수 없어요", "Couldn’t Connect to the Station"),
     "n_stations": ("방송 {n}개", "{n} stations"),
 
     "no_videos_title": ("비디오가 없어요", "No Videos"),
     "no_videos_text": ("videos 폴더에 동영상을 넣어 주세요.", "Copy movies into the videos folder."),
-    "no_books_title": ("KOReader가 없어요", "KOReader Not Installed"),
-    "no_books_text": ("이 이미지에는 KOReader가 들어 있지 않아요.", "This image does not include KOReader."),
+    "no_books_title": ("책이 없어요", "No Books"),
+    "no_books_text": ("books 폴더에 전자책을 넣어 주세요.", "Copy e-books into the books folder."),
+    "no_reader_title": ("KOReader가 없어요", "KOReader Not Installed"),
+    "no_reader_text": ("이 이미지에는 KOReader가 들어 있지 않아요.", "This image does not include KOReader."),
+    "reading": ("읽는 중", "Reading"),
     "no_games_title": ("게임 앱이 없어요", "No Games"),
     "no_games_text": ("PortMaster에서 게임을 설치해 주세요.", "Install games from PortMaster."),
     "opening": ("여는 중…", "Opening…"),
@@ -156,5 +160,5 @@ class Translator:
     def shell_strings(self):
         keys = ("now_playing", "of", "live", "nothing_playing", "cancel", "ok", "done", "space",
                 "volume", "brightness", "shuffle", "repeat", "repeat_one", "on", "off",
-                "opening", "searching", "empty_list")
+                "opening", "searching", "connecting", "empty_list")
         return {k: self(k) for k in keys}

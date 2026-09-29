@@ -59,6 +59,15 @@ class Input:
         self.router = router
         self.devices = {}
         self._repeats = {}
+        self.exclusive = True
+
+    def set_exclusive(self, on):
+        """While the shell is in front nobody else sees the buttons, so a frozen
+        app does not wake up to a backlog of presses meant for the shell."""
+        self.exclusive = on
+        for dev in self.devices.values():
+            if "buttons" in dev.roles:
+                dev.grab(on)
 
     async def start(self):
         self.scan()
@@ -95,6 +104,9 @@ class Input:
                 dev.close()
                 continue
             log.info("input %s: %s %s", node, dev.name, sorted(roles))
+            dev.roles = roles
+            if "buttons" in roles and self.exclusive:
+                dev.grab(True)
             self.devices[node] = dev
             asyncio.get_running_loop().add_reader(dev.fd, self._read, dev)
             if "lid" in roles and dev.switch_state(SW_LID):

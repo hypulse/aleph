@@ -156,7 +156,13 @@ static void draw_row(Page *p, int i, int x, int y, int w, bool selected)
 static void draw_empty(Page *p, int x, int y, int w, int h)
 {
     int cy = y + h / 2;
-    draw_icon("empty", x + w / 2 - 36, cy - 110, C_TEXT3);
+    if (p->empty_icon) {
+        char name[48];
+        snprintf(name, sizeof(name), "empty-%s", p->empty_icon);
+        draw_icon(name, x + w / 2 - 36, cy - 110, C_TEXT3);
+    } else {
+        cy -= 40;
+    }
     draw_text_center(FONT_SEMIBOLD, FONT_BIG - 6, p->empty_title ? p->empty_title : S("empty_list", ""),
                      x + w / 2, cy - 18, C_TEXT, w - 60);
     if (p->empty_text)
@@ -243,9 +249,18 @@ static void draw_progress_row(Player *pl, int y)
         return;
     }
     if (!strcmp(pl->kind, "radio")) {
+        if (pl->buffering) {
+            const char *text = S("connecting", "Connecting…");
+            int tw = text_width(FONT_SEMIBOLD, FONT_SMALL, text);
+            draw_spinner(SCREEN_W / 2 - tw / 2 - 18, y, C_TEXT2);
+            draw_text(FONT_SEMIBOLD, FONT_SMALL, text, SCREEN_W / 2 - tw / 2 + 4, y - 13, C_TEXT2, 0);
+            wants_frame = true;
+            return;
+        }
         const char *live = S("live", "LIVE");
         int tw = text_width(FONT_SEMIBOLD, FONT_SMALL, live);
-        fill_round(SCREEN_W / 2 - tw / 2 - 22, y - 7, 14, 14, 7, C_RED);
+        bool on_air = !strcmp(pl->state, "play");
+        fill_round(SCREEN_W / 2 - tw / 2 - 22, y - 7, 14, 14, 7, on_air ? C_RED : C_TEXT3);
         draw_text(FONT_SEMIBOLD, FONT_SMALL, live, SCREEN_W / 2 - tw / 2, y - 13, C_TEXT2, 0);
         return;
     }

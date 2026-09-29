@@ -46,15 +46,16 @@ class Song(dict):
 
 
 class Music:
-    def __init__(self, mpd: MPD, state, t, cache_dir, on_error=None):
+    def __init__(self, mpd: MPD, state, t, cache_dir, notify=None):
         self.mpd = mpd
         self.state = state
         self.t = t
         self.art_dir = os.path.join(cache_dir, "art")
-        self.on_error = on_error
+        self.notify = notify or (lambda text, icon=None: None)
         self.songs = []
         self.updating = False
         self.station = None
+        self._stream_watch = None
         self._elapsed = (0.0, time.monotonic())
         self._no_art = set()
         self._listeners = []
@@ -110,6 +111,7 @@ class Music:
         info = {
             "state": playing if song else "stop",
             "kind": "radio" if radio else "song",
+            "buffering": radio and playing == "play" and not status.get("audio"),
             "file": uri,
             "elapsed": elapsed,
             "duration": 0.0 if radio else _float(status.get("duration") or song.get("duration")),
@@ -233,8 +235,39 @@ class Music:
         await self.play_songs(songs, 0)
 
     async def play_stream(self, station):
+        """Show the station at once; MPD stays silent while the stream connects."""
         self.station = station
-        await self.mpd.call_list([("clear",), ("add", station["url"]), ("play", "0")])
+        url = station["url"]
+        self.state.update("player", state="play", kind="radio", file=url, buffering=True,
+                          title=station.get("name") or url, artist="", album="", art=station.get("art"),
+                          elapsed=0.0, duration=0.0, pos=1, count=1)
+        if self._stream_watch:
+            self._stream_watch.cancel()
+        await self.mpd.call_list([("clear",), ("add", url), ("play", "0")])
+        self._stream_watch = spawn(self._watch_stream(url))
+
+    async def _watch_stream(self, url, timeout=20):
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            await asyncio.sleep(0.5)
+            if self.state.get("player").get("file") != url:
+                return
+            try:
+                status = await self._status()
+            except MPDError:
+                return
+            if status.get("error"):
+                break
+            if status.get("audio") or status.get("state") != "play":
+                await self.refresh()
+                return
+        log.warning("station did not start: %s", url)
+        try:
+            await self.mpd.call_list([("clearerror",), ("stop",)])
+        except MPDError:
+            pass
+        self.notify(self.t("stream_failed"), "wifi")
+        await self.refresh()
 
     async def enqueue(self, song, next_up=False):
         if next_up:

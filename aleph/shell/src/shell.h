@@ -26,7 +26,7 @@ typedef struct {
     Item *items;
     int count;
     bool loaded, loading_shown, tall, live, index, sheet;
-    char *empty_title, *empty_text;
+    char *empty_title, *empty_text, *empty_icon;
     int value, min, max, step;
     int sel;
     float scroll, scroll_from, scroll_to;
@@ -71,7 +71,7 @@ typedef struct {
     double elapsed, duration;
     Uint32 elapsed_at;
     int pos, count;
-    bool shuffle, repeat, single;
+    bool shuffle, repeat, single, buffering;
 } Player;
 
 typedef struct {

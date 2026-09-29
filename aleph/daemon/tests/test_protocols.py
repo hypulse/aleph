@@ -9,6 +9,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from aleph.audio import _sink  # noqa: E402
 from aleph.mpd import MPD, filter_expr, quote, records, values  # noqa: E402
+from aleph.pages import BOOK_EXTS, folder_listing  # noqa: E402
 from aleph.radio import Radio, station_from_api  # noqa: E402
 from aleph.util import enc, fmt_duration, index_letter, sort_key, split_path  # noqa: E402
 from aleph.wifi import parse_terse  # noqa: E402
@@ -103,6 +104,18 @@ class MpdClientTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(mime, "image/png")
 
 
+class FolderListingTest(unittest.TestCase):
+    def test_books_hide_sidecars_and_sort_by_title(self):
+        d = tempfile.mkdtemp()
+        for sub in ("Classics", "데미안.sdr", ".hidden"):
+            os.makedirs(os.path.join(d, sub))
+        for name in ("The Road.epub", "notes.xyz", "데미안.epub", "Arc.fb2.zip"):
+            open(os.path.join(d, name), "w").close()
+        dirs, files = folder_listing(d, BOOK_EXTS)
+        self.assertEqual(dirs, ["Classics"])
+        self.assertEqual(files, ["Arc.fb2.zip", "The Road.epub", "데미안.epub"])
+
+
 class WifiParsingTest(unittest.TestCase):
     def test_terse_with_escaped_colons(self):
         self.assertEqual(parse_terse("*:Cafe\\:Aleph:72:WPA2"), ["*", "Cafe:Aleph", "72", "WPA2"])
@@ -144,8 +157,8 @@ class RadioTest(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(radio.toggle_favorite(stations[0]))
 
     def test_station_shape(self):
-        s = station_from_api({"stationuuid": "x", "name": " Jazz ", "url": "http://j"})
-        self.assertEqual((s["name"], s["url"], s["bitrate"]), ("Jazz", "http://j", 0))
+        s = station_from_api({"stationuuid": "x", "name": " Jazz ", "url": "http://j", "codec": "UNKNOWN"})
+        self.assertEqual((s["name"], s["url"], s["bitrate"], s["codec"]), ("Jazz", "http://j", 0, ""))
 
 
 if __name__ == "__main__":

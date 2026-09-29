@@ -28,7 +28,8 @@ class RadioError(Exception):
 
 
 def station_from_api(raw):
-    tags = [t for t in (raw.get("tags") or "").split(",") if t][:3]
+    tags = [t.strip() for t in (raw.get("tags") or "").split(",") if t.strip()][:3]
+    codec = (raw.get("codec") or "").strip()
     return {
         "uuid": raw.get("stationuuid", ""),
         "name": (raw.get("name") or "").strip() or "Radio",
@@ -36,7 +37,7 @@ def station_from_api(raw):
         "favicon": raw.get("favicon") or "",
         "tags": tags,
         "country": raw.get("countrycode") or "",
-        "codec": raw.get("codec") or "",
+        "codec": "" if codec.upper() == "UNKNOWN" else codec,
         "bitrate": int(raw.get("bitrate") or 0),
     }
 

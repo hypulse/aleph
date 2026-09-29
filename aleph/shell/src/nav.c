@@ -41,6 +41,7 @@ void page_free(Page *p)
     SDL_free(p->title);
     SDL_free(p->empty_title);
     SDL_free(p->empty_text);
+    SDL_free(p->empty_icon);
     SDL_free(p);
 }
 
@@ -162,10 +163,12 @@ static void page_fill(Page *p, cJSON *pg)
     p->step = json_int(pg, "step", 5);
     xfree(&p->empty_title);
     xfree(&p->empty_text);
+    xfree(&p->empty_icon);
     cJSON *empty = cJSON_GetObjectItemCaseSensitive(pg, "empty");
     if (empty) {
         p->empty_title = json_str(empty, "title");
         p->empty_text = json_str(empty, "text");
+        p->empty_icon = json_str(empty, "icon");
     }
 
     cJSON *items = cJSON_GetObjectItemCaseSensitive(pg, "items");
@@ -201,6 +204,11 @@ static void page_fill(Page *p, cJSON *pg)
                 sel = i;
         SDL_free(keep);
     }
+    /* A list of choices opens on the current choice. */
+    if (sel < 0 && first && !cJSON_HasObjectItem(pg, "selected"))
+        for (int i = 0; i < p->count && sel < 0; i++)
+            if (p->items[i].accessory == ACC_CHECK)
+                sel = i;
     if (sel < 0)
         sel = first ? json_int(pg, "selected", 0) : p->sel;
     if (sel >= p->count)
@@ -333,12 +341,21 @@ void nav_reload(Page *p)
         page_request(p);
 }
 
+/* A pattern ending in "/" "*" names that page and everything below it; others match exactly. */
+static bool path_matches(const char *pattern, const char *path)
+{
+    size_t n = strlen(pattern);
+    if (n >= 2 && !strcmp(pattern + n - 2, "/*"))
+        return !strncmp(path, pattern, n - 2) && (path[n - 2] == '\0' || path[n - 2] == '/');
+    return !strcmp(pattern, path);
+}
+
 void nav_reload_path(const char *path)
 {
     for (int i = 0; i < app.depth; i++)
-        if (!strcmp(app.stack[i]->path, path) && app.stack[i]->loaded)
+        if (path_matches(path, app.stack[i]->path) && app.stack[i]->loaded)
             nav_reload(app.stack[i]);
-    if (app.overlay && !strcmp(app.overlay->path, path))
+    if (app.overlay && path_matches(path, app.overlay->path))
         nav_reload(app.overlay);
 }
 
@@ -797,6 +814,7 @@ void status_update(cJSON *state)
         p->shuffle = json_bool(pl, "shuffle");
         p->repeat = json_bool(pl, "repeat");
         p->single = json_bool(pl, "single");
+        p->buffering = json_bool(pl, "buffering");
     }
     cJSON *vol = cJSON_GetObjectItemCaseSensitive(state, "volume");
     if (vol) {

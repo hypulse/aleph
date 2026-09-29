@@ -6,11 +6,13 @@ import secrets
 from .apps import installed_ports, port_spec
 from .radio import RadioError
 from .system import human_size
-from .util import enc, spawn, split_path
+from .util import enc, sort_key, spawn, split_path
 
 log = logging.getLogger("aleph.pages")
 
 VIDEO_EXTS = (".mp4", ".mkv", ".avi", ".mov", ".webm", ".m4v", ".ts", ".mpg", ".mpeg", ".wmv")
+BOOK_EXTS = (".epub", ".pdf", ".mobi", ".azw3", ".azw", ".fb2", ".fb2.zip", ".cbz", ".cbr", ".djvu",
+             ".txt", ".md", ".rtf", ".docx", ".odt", ".html", ".htm", ".chm", ".xps")
 TIMEOUTS = (15, 30, 60, 120, 300, 0)
 LIMITS = (100, 90, 80, 70, 60, 50)
 
@@ -29,6 +31,36 @@ def page(path, title, items, **extra):
     out = {"path": path, "title": title, "items": items, "style": "list"}
     out.update({k: v for k, v in extra.items() if v is not None})
     return out
+
+
+def empty(icon, title, text=None):
+    return {"icon": icon, "title": title, "text": text}
+
+
+def _strip_ext(name, exts):
+    lower = name.lower()
+    ext = max((e for e in exts if lower.endswith(e)), key=len, default="")
+    return name[:len(name) - len(ext)] if ext else os.path.splitext(name)[0]
+
+
+def folder_listing(folder, exts):
+    """Visible subfolders and matching files, folders first, both in library order."""
+    try:
+        entries = list(os.scandir(folder))
+    except OSError:
+        return [], []
+    dirs, files = [], []
+    for e in entries:
+        if e.name.startswith(".") or e.name.endswith(".sdr"):
+            continue
+        try:
+            if e.is_dir():
+                dirs.append(e.name)
+            elif e.name.lower().endswith(exts):
+                files.append(e.name)
+        except OSError:
+            continue
+    return sorted(dirs, key=sort_key), sorted(files, key=lambda n: sort_key(_strip_ext(n, exts)))
 
 
 class Pages:
@@ -60,7 +92,7 @@ class Pages:
         parts = split_path(path)
         handler = getattr(self, "_page_" + (parts[0] if parts else "root"), None)
         if handler is None:
-            return page(path, "", [], empty={"title": self.t("empty_list")})
+            return page(path, "", [], empty=empty(None, self.t("empty_list")))
         return await handler(path, parts[1:])
 
     async def activate(self, path, key):
@@ -127,12 +159,6 @@ class Pages:
             return {"nowplaying": True}
         if key == "nowplaying":
             return {"nowplaying": True}
-        if key == "books":
-            spec = self.app.catalog["koreader"]
-            if spec.available():
-                await self.app.launch(spec, self.t("books"))
-                return {"none": True}
-            return {"push": "/books"}
         if key.startswith("app:"):
             await self.app.apps.resume(key[4:])
             return {"none": True}
@@ -153,7 +179,7 @@ class Pages:
     # music -------------------------------------------------------------------
 
     def _empty_music(self):
-        return {"title": self.t("no_music_title"), "text": self.t("no_music_text")}
+        return empty("music", self.t("no_music_title"), self.t("no_music_text"))
 
     def _song_items(self, songs, playing_file=None):
         return [item(f"s{i}", s["title"], "playing" if s["file"] == playing_file else "none")
@@ -209,14 +235,13 @@ class Pages:
             return page(path, t("genres"), items, empty=self._empty_music())
         if kind == "playlists":
             items = [item("p:" + p, p) for p in await m.playlists()]
-            return page(path, t("playlists"), items,
-                        empty={"title": t("empty_list")})
+            return page(path, t("playlists"), items, empty=empty("music", t("empty_list")))
         if kind == "queue":
             songs = await m.queue()
             pos = self.app.state.get("player")["pos"]
             items = [item(f"q{i}", s["title"], "playing" if i + 1 == pos else "none",
                           subtitle=s["artist"] or None) for i, s in enumerate(songs)]
-            return page(path, t("up_next"), items, empty={"title": t("nothing_playing")},
+            return page(path, t("up_next"), items, empty=empty("music", t("nothing_playing")),
                         selected=max(pos - 1, 0), rows="tall", live=True)
         songs = await self._songs_for(rest)
         if songs is None:
@@ -376,25 +401,25 @@ class Pages:
                      item("countries", t("by_country")), item("search", t("search"))]
             return page(path, t("radio"), items)
         kind = rest[0]
-        net_error = {"title": t("network_error"), "text": t("network_error_text")}
+        net_error = empty("wifi", t("network_error"), t("network_error_text"))
         try:
             if kind == "favorites":
                 items = self._station_items(path, list(r.favorites))
                 return page(path, t("favorites"), items, rows="tall", live=True,
-                            empty={"title": t("no_favorites_title"), "text": t("no_favorites_text")})
+                            empty=empty("star", t("no_favorites_title"), t("no_favorites_text")))
             if kind == "top":
                 return page(path, t("top_stations"), self._station_items(path, await r.top()),
                             rows="tall", empty=net_error)
             if kind == "country" and len(rest) >= 2:
                 title = rest[2] if len(rest) > 2 else (t("korea") if rest[1] == "KR" else rest[1])
                 return page(path, title, self._station_items(path, await r.by_country(rest[1])),
-                            rows="tall", empty={"title": t("no_results")})
+                            rows="tall", empty=empty("search", t("no_results")))
             if kind == "countries":
                 items = [item(f"c:{code}:{name}", name, value=str(n)) for code, name, n in await r.countries()]
                 return page(path, t("by_country"), items, empty=net_error)
             if kind == "search" and len(rest) >= 2:
                 return page(path, rest[1], self._station_items(path, await r.search(rest[1])),
-                            rows="tall", empty={"title": t("no_results")})
+                            rows="tall", empty=empty("search", t("no_results")))
         except RadioError:
             return page(path, t("radio"), [], empty=net_error)
         return page(path, t("radio"), [])
@@ -429,55 +454,59 @@ class Pages:
 
     # videos, books, games ----------------------------------------------------
 
-    def _video_dir(self, rest):
-        root = self.app.paths["videos"]
+    def _media_dir(self, kind, rest):
+        root = os.path.normpath(self.app.paths[kind])
         path = os.path.normpath(os.path.join(root, *rest))
-        return path if path.startswith(root) else root
+        return path if path == root or path.startswith(root + os.sep) else root
 
     async def _page_videos(self, path, rest):
-        folder = self._video_dir(rest)
-        items = []
-        try:
-            entries = sorted(os.scandir(folder), key=lambda e: (not e.is_dir(), e.name.casefold()))
-        except OSError:
-            entries = []
-        for e in entries:
-            if e.name.startswith("."):
-                continue
-            if e.is_dir():
-                items.append(item("d:" + e.name, e.name))
-            elif e.name.lower().endswith(VIDEO_EXTS):
-                items.append(item("f:" + e.name, os.path.splitext(e.name)[0], "none"))
-        title = rest[-1] if rest else self.t("videos")
-        return page(path, title, items,
-                    empty={"title": self.t("no_videos_title"), "text": self.t("no_videos_text")})
+        dirs, files = folder_listing(self._media_dir("videos", rest), VIDEO_EXTS)
+        items = [item("d:" + d, d) for d in dirs]
+        items += [item("f:" + f, _strip_ext(f, VIDEO_EXTS), "none") for f in files]
+        return page(path, rest[-1] if rest else self.t("videos"), items,
+                    empty=empty("video", self.t("no_videos_title"), self.t("no_videos_text")))
 
     async def _do_videos(self, path, rest, key):
         if key.startswith("d:"):
             return {"push": path.rstrip("/") + "/" + enc(key[2:])}
         if key.startswith("f:"):
-            file = os.path.join(self._video_dir(rest), key[2:])
-            await self.app.launch(self.app.catalog["video"], os.path.splitext(key[2:])[0], [file])
-            return {"none": True}
+            file = os.path.join(self._media_dir("videos", rest), key[2:])
+            await self.app.launch(self.app.catalog["video"], _strip_ext(key[2:], VIDEO_EXTS), [file])
 
     async def _page_books(self, path, rest):
-        spec = self.app.catalog["koreader"]
-        items = [item("open", "KOReader", "none")] if spec.available() else []
-        return page(path, self.t("books"), items,
-                    empty={"title": self.t("no_books_title"), "text": self.t("no_books_text")})
+        t = self.t
+        if not self.app.catalog["koreader"].available():
+            return page(path, t("books"), [], empty=empty("book", t("no_reader_title"), t("no_reader_text")))
+        folder = self._media_dir("books", rest)
+        dirs, files = folder_listing(folder, BOOK_EXTS)
+        reading = self.app.apps.opened_file("koreader")
+        items = [item("d:" + d, d) for d in dirs]
+        items += [item("f:" + f, _strip_ext(f, BOOK_EXTS), "none",
+                       value=t("reading") if os.path.join(folder, f) == reading else None) for f in files]
+        return page(path, rest[-1] if rest else t("books"), items,
+                    empty=empty("book", t("no_books_title"), t("no_books_text")))
 
     async def _do_books(self, path, rest, key):
-        await self.app.launch(self.app.catalog["koreader"], self.t("books"))
+        if key.startswith("d:"):
+            return {"push": path.rstrip("/") + "/" + enc(key[2:])}
+        if not key.startswith("f:"):
+            return None
+        file = os.path.join(self._media_dir("books", rest), key[2:])
+        apps = self.app.apps
+        if apps.opened_file("koreader") == file:
+            await apps.resume("koreader")
+        else:
+            await self.app.launch(self.app.catalog["koreader"], _strip_ext(key[2:], BOOK_EXTS), [file])
 
     async def _page_games(self, path, rest):
         items = [item(key, spec.title_key, "none") for key, spec in self.app.catalog.items()
                  if key in ("portmaster", "retroarch") and spec.available()]
-        ports = installed_ports()
+        ports = installed_ports(self.app.paths["ports"])
         if ports:
             items.append(header(self.t("ports")))
             items += [item("port:" + p, title, "none") for title, p in ports]
-        return page(path, self.t("games"), items, live=True,
-                    empty={"title": self.t("no_games_title"), "text": self.t("no_games_text")})
+        return page(path, self.t("games"), items,
+                    empty=empty("game", self.t("no_games_title"), self.t("no_games_text")))
 
     async def _do_games(self, path, rest, key):
         if key.startswith("port:"):
@@ -531,7 +560,7 @@ class Pages:
     async def _settings_wifi_saved(self, path):
         items = [item("u:" + s["uuid"], s["name"], "none") for s in self.app.wifi.saved()]
         return page(path, self.t("saved_networks"), items,
-                    empty={"title": self.t("no_saved_networks")}, live=True)
+                    empty=empty("wifi", self.t("no_saved_networks")), live=True)
 
     async def _settings_bluetooth(self, path):
         t = self.t

@@ -74,6 +74,59 @@ def speaker_body(d, ox, oy, k):
              (ox + 20 * k, oy + 35 * k), (ox + 10 * k, oy + 26 * k), (ox + 2 * k, oy + 26 * k)])
 
 
+CLEAR = (0, 0, 0, 0)
+
+
+def star(d, cx, cy, outer, inner):
+    pts = []
+    for i in range(10):
+        r = outer if i % 2 == 0 else inner
+        a = math.radians(-90 + i * 36)
+        pts.append((cx + r * math.cos(a), cy + r * math.sin(a)))
+    poly(d, pts)
+
+
+def empty_icons(P):
+    """72 pt glyphs in a thin ring for empty lists, one per kind of content."""
+    def glyph(name, draw):
+        img, d = canvas(72, 72)
+        ellipse(d, 3, 3, 69, 69, fill=False, width=3)
+        draw(d)
+        done(img, 72, 72, P("empty-" + name))
+
+    glyph("music", lambda d: note(d, 18, 16, 0.9))
+    glyph("star", lambda d: star(d, 36, 37.5, 18, 7.6))
+
+    def wifi(d):
+        ellipse(d, 32.5, 45, 39.5, 52)
+        for r in (11, 19, 27):
+            arc(d, 36, 50, r, 225, 315, 3.6)
+    glyph("wifi", wifi)
+
+    def search(d):
+        ellipse(d, 20, 20, 44, 44, fill=False, width=3.6)
+        line(d, [(41.5, 41.5), (51, 51)], 5)
+    glyph("search", search)
+
+    def video(d):
+        rrect(d, 16, 23, 56, 49, 5, fill=False, width=3.2)
+        poly(d, [(31, 29.5), (31, 42.5), (42.5, 36)])
+    glyph("video", video)
+
+    def book(d):
+        poly(d, [(15, 24), (34, 27.5), (34, 50), (15, 46.5)])
+        poly(d, [(38, 27.5), (57, 24), (57, 46.5), (38, 50)])
+    glyph("book", book)
+
+    def game(d):
+        rrect(d, 13, 25, 59, 49, 12)
+        d.rectangle([s(20), s(35.5), s(31), s(38.5)], fill=CLEAR)
+        d.rectangle([s(24), s(31.5), s(27), s(42.5)], fill=CLEAR)
+        d.ellipse([s(43.5), s(37.5), s(49.5), s(43.5)], fill=CLEAR)
+        d.ellipse([s(49), s(31), s(55), s(37)], fill=CLEAR)
+    glyph("game", game)
+
+
 def build(out):
     icons = os.path.join(out, "icons")
     os.makedirs(icons, exist_ok=True)
@@ -211,10 +264,7 @@ def build(out):
                  max(1.6, size / 20))
         done(img, size, size, P(name))
 
-    img, d = canvas(72, 72)
-    ellipse(d, 3, 3, 69, 69, fill=False, width=3)
-    note(d, 18, 16, 0.9)
-    done(img, 72, 72, P("empty"))
+    empty_icons(P)
 
     img, d = canvas(80, 80)
     speaker_body(d, 10, 18, 1.1)
@@ -242,12 +292,7 @@ def build(out):
             for r in (6, 11, 16):
                 arc(d, 11, 18, r, 225, 315, 2.2)
         elif name == "star":
-            pts = []
-            for i in range(10):
-                r = 10 if i % 2 == 0 else 4.2
-                a = math.radians(-90 + i * 36)
-                pts.append((11 + r * math.cos(a), 11.5 + r * math.sin(a)))
-            poly(d, pts)
+            star(d, 11, 11.5, 10, 4.2)
         else:
             note(d, 1, 1, 0.5)
         done(img, 22, 22, os.path.join(icons, f"toast-{name}.png"))

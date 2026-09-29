@@ -27,6 +27,9 @@ def _eviocgsw(size):
     return _ioc(2, 0x1B, size)
 
 
+EVIOCGRAB = _ioc(1, 0x90, 4)
+
+
 def _bits(buf, maximum):
     return {i for i in range(maximum + 1) if buf[i // 8] >> (i % 8) & 1}
 
@@ -34,6 +37,7 @@ def _bits(buf, maximum):
 class Device:
     def __init__(self, path):
         self.path = path
+        self.roles = set()
         self.fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_CLOEXEC)
         try:
             buf = bytearray(256)
@@ -60,6 +64,13 @@ class Device:
         except OSError:
             return None
         return code in _bits(buf, SW_MAX)
+
+    def grab(self, on):
+        try:
+            fcntl.ioctl(self.fd, EVIOCGRAB, 1 if on else 0)
+            return True
+        except OSError:
+            return False
 
     def read(self):
         try:

@@ -33,7 +33,8 @@ mpd "$WORK/mpd.conf"
 
 pkill -f "alephd --sim" 2>/dev/null || true
 python3 "$ROOT/daemon/alephd" --sim --socket "$WORK/alephd.sock" --config "$WORK/config" \
-    --cache "$WORK/cache" --music "$WORK/music" --videos "$WORK/videos" --data "$WORK/share" \
+    --cache "$WORK/cache" --music "$WORK/music" --videos "$WORK/videos" --books "$WORK/books" \
+    --ports "$WORK/ports" --data "$WORK/share" \
     --mpd "$WORK/mpd.sock" >"$WORK/alephd.log" 2>&1 &
 DAEMON=$!
 

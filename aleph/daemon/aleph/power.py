@@ -62,6 +62,7 @@ class Inhibitor:
 
 class Power:
     LONG_PRESS = 1.2
+    LID_SLEEP = 30
 
     def __init__(self, state, settings, events, sim=False):
         self.state = state
@@ -70,10 +71,11 @@ class Power:
         self.sim = sim
         self.backlight = Backlight()
         self.power_key_lock = Inhibitor("handle-power-key", "aleph handles the power button")
-        self.lid_lock = Inhibitor("handle-lid-switch", "music keeps playing with the lid closed")
+        self.lid_lock = Inhibitor("handle-lid-switch", "aleph decides what closing the lid does")
         self.lid_closed = False
         self.last_activity = time.monotonic()
         self.screen_off_at = None
+        self.stopped_at = 0.0
         self._power_down_at = None
         self._long_press = None
         self._poke = asyncio.Event()
@@ -81,6 +83,7 @@ class Power:
     async def start(self):
         if not self.sim:
             await self.power_key_lock.hold()
+            await self.lid_lock.hold()
         self.apply_brightness()
         spawn(self._idle_loop())
 
@@ -120,11 +123,9 @@ class Power:
         return False
 
     async def playback_changed(self):
+        if not self.playing():
+            self.stopped_at = time.monotonic()
         self.poke()
-        if self.playing() and self.settings["lid_keep_playing"]:
-            await self.lid_lock.hold()
-        else:
-            await self.lid_lock.release()
 
     async def lid(self, closed):
         self.lid_closed = closed
@@ -156,18 +157,22 @@ class Power:
     def poke(self):
         self._poke.set()
 
-    def _next_deadline(self):
-        deadlines = []
+    def _screen_deadline(self):
         if self.screen_on and self.settings["screen_timeout"]:
-            deadlines.append(self.last_activity + self.settings["screen_timeout"])
-        if not self.screen_on and not self.playing() and self.screen_off_at:
-            deadlines.append(self.screen_off_at + self.settings["sleep_timeout"])
-        return min(deadlines) if deadlines else None
+            return self.last_activity + self.settings["screen_timeout"]
+        return None
+
+    def _sleep_deadline(self):
+        """Dark and silent: sleep soon with the lid shut, later with it open."""
+        if self.screen_on or self.playing() or not self.screen_off_at:
+            return None
+        wait = self.LID_SLEEP if self.lid_closed else self.settings["sleep_timeout"]
+        return max(self.screen_off_at, self.stopped_at) + wait
 
     async def _idle_loop(self):
         while True:
-            deadline = self._next_deadline()
-            timeout = None if deadline is None else max(0.05, deadline - time.monotonic())
+            deadlines = [d for d in (self._screen_deadline(), self._sleep_deadline()) if d is not None]
+            timeout = max(0.05, min(deadlines) - time.monotonic()) if deadlines else None
             try:
                 await asyncio.wait_for(self._poke.wait(), timeout)
                 self._poke.clear()
@@ -175,16 +180,18 @@ class Power:
             except asyncio.TimeoutError:
                 pass
             now = time.monotonic()
-            if (self.screen_on and self.settings["screen_timeout"]
-                    and now - self.last_activity >= self.settings["screen_timeout"]):
+            screen, sleep = self._screen_deadline(), self._sleep_deadline()
+            if screen is not None and now >= screen:
                 await self.set_screen(False)
-            elif (not self.screen_on and not self.playing() and self.screen_off_at
-                    and now - self.screen_off_at >= self.settings["sleep_timeout"]):
-                self.screen_off_at = None
+            elif sleep is not None and now >= sleep:
                 await self.sleep()
 
     async def sleep(self):
         self.events.before_sleep()
+        # Dark before we go, so the button that wakes us turns the screen back on; the
+        # countdown restarts so a wake that nobody follows up sleeps again later.
+        await self.set_screen(False)
+        self.screen_off_at = time.monotonic()
         if self.sim:
             log.info("sim: suspend")
             return
