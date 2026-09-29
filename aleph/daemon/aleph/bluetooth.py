@@ -187,7 +187,7 @@ class FakeBackend(Backend):
             ("8BitDo Pro 2", "input-gaming", True),
             ("Galaxy Buds2", "audio-headset", False),
             ("JBL Flip 6", "audio-card", False),
-            ("Seungjae’s iPhone", "phone", False),
+            ("iPhone", "phone", False),
         ]
         for i, (name, icon, paired) in enumerate(seeds):
             path = f"/org/bluez/hci0/dev_{i:02X}"

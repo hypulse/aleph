@@ -3,7 +3,7 @@ name: aleph H700 image
 on:
   push:
     branches: [demo]
-    paths-ignore: ["**.md", "aleph/tools/**"]
+    paths-ignore: ["**.md", "aleph/docs/**", "aleph/tools/**"]
   workflow_dispatch:
 
 concurrency:
