@@ -21,10 +21,12 @@ replaces the front end with a small shell built around your music.
 - **Bluetooth** headphones connect from one list, in Settings or the Control Center. If
   they drop, the music pauses instead of carrying on through the speaker.
 - **Wi-Fi** remembers every network you join.
-- **Multitasking**: each app keeps its place. Home pauses it, and the home screen lists it
-  so you can pick it up again.
-- **Lid**: closing it turns the screen off and keeps the music playing. With nothing
-  playing, the device goes to sleep.
+- **Multitasking**: each app keeps its place. Home pauses it where it is, and the home
+  screen lists it so you can pick it up again. Up to three apps stay open; when memory
+  runs low, the one used longest ago closes first and gets the chance to save.
+- **Lid and power**: closing the lid turns the screen off and keeps the music playing,
+  and the app in front pauses until the lid opens. With nothing playing the device
+  sleeps, and opening the lid wakes it. Videos keep the screen on while they play.
 
 ## The rules
 
@@ -99,7 +101,8 @@ Pushes to the `demo` branch are built by `.github/workflows/aleph-h700.yml`.
 ## Try it without the device
 
 The simulator runs MPD, alephd with simulated hardware and the shell offscreen, and saves
-screenshots along a scripted walk:
+screenshots along a scripted walk. Set `ALEPH_RECORD=/out/demo.mp4` and run
+`aleph/tools/sim/demo.txt` to record the whole system as a captioned video.
 
 ```sh
 docker build -t aleph-dev aleph/tools/dev
