@@ -1,0 +1,72 @@
+# A quiet pass over the main screens after trimming labels and decoration.
+wait 2500
+shot c01-home.png
+key confirm
+wait 1200
+hold down 3
+key confirm
+wait 1500
+shot c02-albums.png
+key confirm
+wait 1200
+key down
+key confirm
+wait 2500
+shot c03-nowplaying.png
+key more
+wait 800
+shot c04-options.png
+key back
+daemon home
+wait 800
+key control
+wait 1200
+shot c05-control.png
+key control
+wait 600
+hold down 5
+key confirm
+wait 1200
+shot c06-settings.png
+key down
+key confirm
+wait 1500
+shot c07-bluetooth.png
+key back
+wait 500
+key up
+key confirm
+wait 1500
+shot c08-wifi.png
+key back
+wait 500
+key down
+key down
+key confirm
+wait 1200
+shot c09-display.png
+key back
+wait 500
+hold down 5
+key confirm
+wait 1500
+shot c10-about.png
+daemon home
+wait 800
+hold up 8
+key down
+key confirm
+wait 800
+key down
+key confirm
+wait 4500
+shot c11-stations.png
+key confirm
+wait 7000
+shot c12-radio.png
+daemon home
+wait 800
+hold down 4
+key confirm
+wait 1500
+shot c13-games.png

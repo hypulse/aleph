@@ -25,7 +25,7 @@ typedef struct Page {
     int style;
     Item *items;
     int count;
-    bool loaded, loading_shown, tall, live, index, sheet, split;
+    bool loaded, loading_shown, tall, art_rows, live, index, sheet, split;
     char *empty_title, *empty_text, *empty_icon;
     int value, min, max, step;
     int sel;

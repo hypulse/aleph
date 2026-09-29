@@ -161,8 +161,7 @@ class Pages:
             items.append(header(t("open_apps")))
             for a in apps:
                 kind = {"koreader": "book", "video": "video"}.get(a["key"], "game")
-                items.append(item(f"app:{a['key']}", a["title"], "none", preview=kind,
-                                  value=t("paused_app") if a["frozen"] else None))
+                items.append(item(f"app:{a['key']}", a["title"], "none", preview=kind))
         return page("/", "aleph", items, live=True, layout="split", art=self._art_pool(path))
 
     async def _do_root(self, path, rest, key):
@@ -263,18 +262,17 @@ class Pages:
             artist = rest[1]
             albums = m.albums(artist=artist)
             items = [item("all", t("all_songs"))]
-            items += [item(f"al:{i}", album or t("unknown_album"), art=self._album_art(file),
-                           subtitle=t("n_songs", n=len(m.album_songs(a, album))))
+            items += [item(f"al:{i}", album or t("unknown_album"), art=self._album_art(file))
                       for i, ((a, album), file) in enumerate(albums)]
             self._prefetch_art(path, [f for _, f in albums])
-            return page(path, artist or t("unknown_artist"), items, rows="tall")
+            return page(path, artist or t("unknown_artist"), items, rows="art")
         if kind == "albums":
             albums = m.albums()
             items = [item(f"al:{i}", album or t("unknown_album"), subtitle=a or t("unknown_artist"),
                           art=self._album_art(file))
                      for i, ((a, album), file) in enumerate(albums)]
             self._prefetch_art(path, [f for _, f in albums])
-            return page(path, t("albums"), items, empty=self._empty_music(), rows="tall", index=True)
+            return page(path, t("albums"), items, empty=self._empty_music(), rows="art", index=True)
         if kind == "genres":
             items = [item("g:" + g, g) for g in m.genres()]
             return page(path, t("genres"), items, empty=self._empty_music())
@@ -384,8 +382,7 @@ class Pages:
         t = self.t
         player = self.app.state.get("player")
         left = self.app.power.sleep_timer_left()
-        timer = {"key": "timer", "title": t("sleep_timer"),
-                 "value": t("minutes", n=left) if left else t("off")}
+        timer = {"key": "timer", "title": t("sleep_timer"), "value": t("minutes", n=left) if left else None}
         if player["kind"] == "radio":
             station = self.app.music.station
             if not station:
@@ -393,10 +390,10 @@ class Pages:
             fav = self.app.radio.is_favorite(station["uuid"])
             options = [{"key": "fav", "title": t("remove_favorite") if fav else t("add_favorite")}, timer]
         else:
-            repeat = t("repeat_one") if player["single"] else t("repeat") if player["repeat"] else t("off")
+            repeat = (t("repeat_one") if player["single"] else t("on")) if player["repeat"] else None
             options = [
-                {"key": "shuffle", "title": t("shuffle"), "value": t("on") if player["shuffle"] else t("off")},
-                {"key": "repeat", "title": t("repeat"), "value": repeat if player["repeat"] else t("off")},
+                {"key": "shuffle", "title": t("shuffle"), "value": t("on") if player["shuffle"] else None},
+                {"key": "repeat", "title": t("repeat"), "value": repeat},
                 {"key": "queue", "title": t("up_next")},
             ]
             if player["album"]:
@@ -443,10 +440,8 @@ class Pages:
         self._stations[path] = stations
         items = []
         for i, s in enumerate(stations):
-            detail = " · ".join(filter(None, [", ".join(s["tags"][:2]),
-                                              f"{s['codec']} {s['bitrate']}k" if s["bitrate"] else s["codec"]]))
             items.append(item(f"st{i}", s["name"], "star" if self.app.radio.is_favorite(s["uuid"]) else "none",
-                              subtitle=detail or self.t("live"), art=self._icon_path(s)))
+                              subtitle=", ".join(s["tags"][:2]) or None, art=self._icon_path(s)))
         self._prefetch_icons(path, stations)
         return items
 
@@ -472,7 +467,7 @@ class Pages:
         t = self.t
         r = self.app.radio
         if not rest:
-            items = [item("favorites", t("favorites"), value=str(len(r.favorites)) if r.favorites else None),
+            items = [item("favorites", t("favorites")),
                      item("top", t("top_stations")), item("country/KR", t("korea")),
                      item("countries", t("by_country")), item("search", t("search"))]
             return page(path, t("radio"), items)
@@ -481,21 +476,21 @@ class Pages:
         try:
             if kind == "favorites":
                 items = self._station_items(path, list(r.favorites))
-                return page(path, t("favorites"), items, rows="tall", live=True,
+                return page(path, t("favorites"), items, rows="art", live=True,
                             empty=empty("star", t("no_favorites_title"), t("no_favorites_text")))
             if kind == "top":
                 return page(path, t("top_stations"), self._station_items(path, await r.top()),
-                            rows="tall", empty=net_error)
+                            rows="art", empty=net_error)
             if kind == "country" and len(rest) >= 2:
                 title = rest[2] if len(rest) > 2 else (t("korea") if rest[1] == "KR" else rest[1])
                 return page(path, title, self._station_items(path, await r.by_country(rest[1])),
-                            rows="tall", empty=empty("search", t("no_results")))
+                            rows="art", empty=empty("search", t("no_results")))
             if kind == "countries":
                 items = [item(f"c:{code}:{name}", name, value=str(n)) for code, name, n in await r.countries()]
                 return page(path, t("by_country"), items, empty=net_error)
             if kind == "search" and len(rest) >= 2:
                 return page(path, rest[1], self._station_items(path, await r.search(rest[1])),
-                            rows="tall", empty=empty("search", t("no_results")))
+                            rows="art", empty=empty("search", t("no_results")))
         except RadioError:
             return page(path, t("radio"), [], empty=net_error)
         return page(path, t("radio"), [])
@@ -559,10 +554,8 @@ class Pages:
             return page(path, t("books"), [], empty=empty("book", t("no_reader_title"), t("no_reader_text")))
         folder = self._media_dir("books", rest)
         dirs, files = folder_listing(folder, BOOK_EXTS)
-        reading = self.app.apps.opened_file("koreader")
         items = [item("d:" + d, d) for d in dirs]
-        items += [item("f:" + f, _strip_ext(f, BOOK_EXTS), "none",
-                       value=t("reading") if os.path.join(folder, f) == reading else None) for f in files]
+        items += [item("f:" + f, _strip_ext(f, BOOK_EXTS), "none") for f in files]
         return page(path, rest[-1] if rest else t("books"), items,
                     empty=empty("book", t("no_books_title"), t("no_books_text")))
 
@@ -579,12 +572,9 @@ class Pages:
             await self.app.launch(self.app.catalog["koreader"], _strip_ext(key[2:], BOOK_EXTS), [file])
 
     async def _page_games(self, path, rest):
-        items = [item(key, spec.title_key, "none") for key, spec in self.app.catalog.items()
-                 if key in ("portmaster", "retroarch") and spec.available()]
-        ports = installed_ports(self.app.paths["ports"])
-        if ports:
-            items.append(header(self.t("ports")))
-            items += [item("port:" + p, title, "none") for title, p in ports]
+        items = [item("port:" + p, title, "none") for title, p in installed_ports(self.app.paths["ports"])]
+        items += [item(key, spec.title_key, "none") for key, spec in self.app.catalog.items()
+                  if key in ("portmaster", "retroarch") and spec.available()]
         return page(path, self.t("games"), items,
                     empty=empty("game", self.t("no_games_title"), self.t("no_games_text")))
 
@@ -615,9 +605,8 @@ class Pages:
         items = [
             item("wifi", t("wifi"), value=wifi["ssid"] if wifi["ssid"] else (t("on") if wifi["enabled"] else t("off"))),
             item("bluetooth", t("bluetooth"), value=bt["audio"] or (t("on") if bt["enabled"] else t("off"))),
-            item("sound", t("sound")),
             item("display", t("display")),
-            item("power", t("power")),
+            item("limit", t("volume_limit"), value=self._limit_label()),
             item("language", t("language"), value=lang),
             item("transfer", t("add_files")),
             item("about", t("about")),
@@ -634,7 +623,7 @@ class Pages:
         url = tr.url() if await tr.start() else None
         if not url:
             return page(path, t("add_files"), [], empty=empty("wifi", t("transfer_failed")))
-        text = t("transfer_text", code=tr.code)
+        text = t("transfer_code", code=tr.code)
         if tr.received:
             text += "\n" + t("transfer_received", n=tr.received)
         return page(path, t("add_files"), [], live=True, empty=empty("upload", url, text))
@@ -644,7 +633,7 @@ class Pages:
         w = self.app.wifi
         items = [item("toggle", t("wifi"), "switch", on=w.enabled)]
         if w.enabled:
-            items.append(header(t("choose_network")))
+            items.append(header(""))
             for n in w.networks():
                 accessory = "spinner" if w.busy == n["ssid"] else "check" if n["active"] else "none"
                 items.append(item("n:" + n["ssid"], n["ssid"], accessory, lock=n["secure"],
@@ -669,28 +658,20 @@ class Pages:
                 for d in mine:
                     busy = d.path in b.busy
                     items.append(item("d:" + d.path, d.name, "spinner" if busy else "none",
-                                      value=None if busy else (t("connected") if d.connected else t("not_connected")),
+                                      value=t("connected") if d.connected and not busy else None,
                                       icon=d.kind))
-            items.append(header(t("other_devices")))
+            items.append({"header": True, "title": t("other_devices"), "spinner": True})
             for d in b.other_devices():
                 busy = d.path in b.busy
                 items.append(item("d:" + d.path, d.name, "spinner" if busy else "none", icon=d.kind))
-            items.append({"header": True, "title": t("searching"), "spinner": True})
             b.begin_discovery()
         return page(path, t("bluetooth"), items, live=True)
 
-    async def _settings_sound(self, path):
-        t = self.t
-        st = self.app.settings
-        limit = st["volume_limit"]
-        items = [
-            item("limit", t("volume_limit"), value=t("no_limit") if limit >= 100 else f"{limit}%"),
-            item("pause_on_disconnect", t("pause_on_disconnect"), "switch", on=st["pause_on_disconnect"]),
-            item("pause_on_unplug", t("pause_on_unplug"), "switch", on=st["pause_on_unplug"]),
-        ]
-        return page(path, t("sound"), items)
+    def _limit_label(self):
+        limit = self.app.settings["volume_limit"]
+        return None if limit >= 100 else f"{limit}%"
 
-    async def _settings_sound_limit(self, path):
+    async def _settings_limit(self, path):
         current = self.app.settings["volume_limit"]
         items = [item(f"l{v}", self.t("no_limit") if v == 100 else f"{v}%",
                       "check" if v == current else "none") for v in LIMITS]
@@ -700,7 +681,9 @@ class Pages:
         t = self.t
         st = self.app.settings
         items = [item("brightness", t("brightness"), value=f"{st['brightness']}%"),
-                 item("timeout", t("screen_timeout"), value=self._duration_label(st["screen_timeout"]))]
+                 item("timeout", t("screen_timeout"), value=self._duration_label(st["screen_timeout"])),
+                 item("lid", t("when_lid_closes"),
+                      value=t("lid_keep") if st["lid_keep_playing"] else t("lid_sleep"))]
         return page(path, t("display"), items)
 
     async def _settings_display_brightness(self, path):
@@ -713,16 +696,7 @@ class Pages:
                  for v in TIMEOUTS]
         return page(path, self.t("screen_timeout"), items)
 
-    async def _settings_power(self, path):
-        t = self.t
-        keep = self.app.settings["lid_keep_playing"]
-        items = [item("lid", t("when_lid_closes"), value=t("lid_keep") if keep else t("lid_sleep")),
-                 item("sleep", t("sleep_now"), "none"),
-                 item("restart", t("restart"), "none"),
-                 item("shutdown", t("shut_down"), "none")]
-        return page(path, t("power"), items)
-
-    async def _settings_power_lid(self, path):
+    async def _settings_display_lid(self, path):
         keep = self.app.settings["lid_keep_playing"]
         items = [item("keep", self.t("lid_keep"), "check" if keep else "none"),
                  item("sleep", self.t("lid_sleep"), "none" if keep else "check")]
@@ -738,20 +712,16 @@ class Pages:
         t = self.t
         info = self.app.system.about(self.app.paths["music"])
         m = self.app.music
-        battery = self.app.state.get("battery")
         rows = [
-            ("name", "aleph"),
             ("songs", str(len(m.songs))),
             ("albums", str(len(m.albums()))),
             ("capacity", human_size(info["capacity"])),
             ("available", human_size(info["available"])),
-            ("battery", f"{battery['percent']}%"),
-            ("boot_time", t("seconds_short", n=f"{self.app.ui_ready_at:.1f}") if self.app.ui_ready_at else "—"),
-            ("ip_address", info["ip"] or "—"),
-            ("bt_address", self.app.bluetooth.backend.address or "—"),
+            ("version", info["version"]),
             ("model", info["model"]),
-            ("version", info["version"] + (f" ({info['software']})" if info["software"] else "")),
         ]
+        if self.app.ui_ready_at:
+            rows.append(("boot_time", t("seconds_short", n=f"{self.app.ui_ready_at:.1f}")))
         items = [item(k, t(k), "none", value=v) for k, v in rows]
         return page(path, t("about"), items, style="about")
 
@@ -787,43 +757,24 @@ class Pages:
                 return {"reload": True}
             spawn(self.app.bluetooth.activate(key[2:]))
             return {"reload": True}
-        if sub == "sound":
-            if key == "limit":
-                return {"push": "/settings/sound/limit"}
-            st.set(key, not st[key])
-            return {"reload": True}
-        if sub == "sound/limit":
+        if sub == "limit":
             st.set("volume_limit", int(key[1:]))
             await self.app.audio.clamp_to_limit()
             return {"back": True}
         if sub == "display":
             return {"push": f"/settings/display/{key}"}
+        if sub == "display/lid":
+            st.set("lid_keep_playing", key == "keep")
+            await self.app.power.playback_changed()
+            return {"back": True}
         if sub == "display/timeout":
             st.set("screen_timeout", int(key[1:]))
             self.app.power.poke()
-            return {"back": True}
-        if sub == "power":
-            if key == "lid":
-                return {"push": "/settings/power/lid"}
-            if key == "sleep":
-                spawn(self.app.power.sleep())
-                return {"none": True}
-            question = t("restart_q") if key == "restart" else t("shut_down_q")
-            action = self.app.power.restart if key == "restart" else self.app.power.shut_down
-            return {"confirm": {"title": question, "ok": t("restart") if key == "restart" else t("shut_down"),
-                                "destructive": True, "token": self._token(lambda: self._power_action(action))}}
-        if sub == "power/lid":
-            st.set("lid_keep_playing", key == "keep")
-            await self.app.power.playback_changed()
             return {"back": True}
         if sub == "language":
             st.set("lang", key)
             self.app.set_language(key)
             return {"relabel": True, "back": True}
-        return {"none": True}
-
-    def _power_action(self, action):
-        spawn(action())
         return {"none": True}
 
     async def _join(self, ssid, password):
@@ -868,7 +819,7 @@ class Pages:
             for d in b.recent_audio():
                 busy = d.path in b.busy
                 items.append(item("d:" + d.path, d.name, "spinner" if busy else "none", icon="audio",
-                                  value=None if busy else (t("connected") if d.connected else t("not_connected"))))
+                                  value=t("connected") if d.connected and not busy else None))
         wifi = self.app.state.get("wifi")
         items += [
             item("bluetooth", t("bluetooth"), value=t("on") if b.enabled else t("off")),
@@ -876,7 +827,7 @@ class Pages:
             item("brightness", t("brightness"), value=f"{self.app.settings['brightness']}%"),
             item("sleep", t("sleep_now"), "none"),
         ]
-        return page(path, t("control_center"), items, presentation="sheet", live=True)
+        return page(path, "", items, presentation="sheet", live=True)
 
     async def _do_control(self, path, rest, key):
         if key.startswith("d:"):

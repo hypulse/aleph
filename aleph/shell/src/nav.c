@@ -182,7 +182,8 @@ static void page_fill(Page *p, cJSON *pg)
         }
     }
     char *rows = json_str(pg, "rows");
-    p->tall = rows && !strcmp(rows, "tall");
+    p->art_rows = rows && !strcmp(rows, "art");
+    p->tall = rows && (!strcmp(rows, "tall") || p->art_rows);
     SDL_free(rows);
     char *pres = json_str(pg, "presentation");
     p->sheet = pres && !strcmp(pres, "sheet");
@@ -728,7 +729,7 @@ static void sheet_key(const char *key)
     Sheet *s = &app.sheet;
     if (!strcmp(key, "up") && s->sel > 0)
         s->sel--;
-    else if (!strcmp(key, "down") && s->sel < s->count)
+    else if (!strcmp(key, "down") && s->sel < s->count - 1)
         s->sel++;
     else if (!strcmp(key, "back")) {
         s->active = false;

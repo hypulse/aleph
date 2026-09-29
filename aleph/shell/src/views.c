@@ -15,8 +15,8 @@ int row_height(Page *p, int i)
 {
     Item *it = &p->items[i];
     if (it->header)
-        return HEADER_H;
-    return p->tall && it->subtitle ? ROW_TALL_H : ROW_H;
+        return it->title && *it->title ? HEADER_H : 14;
+    return p->art_rows || (p->tall && it->subtitle) ? ROW_TALL_H : ROW_H;
 }
 
 int item_y(Page *p, int i)
@@ -54,8 +54,6 @@ static void draw_switch(int x, int y, bool on, bool selected)
 static void draw_selection(int x, int y, int w, int h)
 {
     fill_gradient(x, y, w, h, C_SEL_TOP, C_SEL_BOTTOM);
-    fill_rect(x, y, w, 1, RGB(126, 184, 246));
-    fill_rect(x, y + h - 1, w, 1, C_SEL_LINE);
 }
 
 static const char *device_icon(const char *kind)
@@ -74,8 +72,9 @@ static void draw_row(Page *p, int i, int x, int y, int w, bool selected)
     Item *it = &p->items[i];
     int h = row_height(p, i);
     if (it->header) {
-        fill_rect(x, y, w, h, C_HEADER_BG);
-        int tw = draw_text(FONT_SEMIBOLD, FONT_HEADER, it->title, x + PAD_X, y + 7, C_TEXT2, w - 2 * PAD_X);
+        if (!it->title || !*it->title)
+            return;
+        int tw = draw_text(FONT_SEMIBOLD, FONT_HEADER, it->title, x + PAD_X, y + 9, C_TEXT3, w - 2 * PAD_X);
         if (it->spinner) {
             draw_spinner(x + PAD_X + tw + 20, y + h / 2, C_TEXT2);
             wants_frame = true;
@@ -88,7 +87,7 @@ static void draw_row(Page *p, int i, int x, int y, int w, bool selected)
     Rgba text2 = selected ? RGBA(255, 255, 255, 215) : C_TEXT2;
     int left = x + PAD_X, right = x + w - PAD_X;
 
-    if (p->tall && it->subtitle) {
+    if (p->art_rows) {
         const char *fallback = !SDL_strncmp(p->path, "/radio", 6) ? "art-radio" : "art-default";
         draw_image(it->art, fallback, left, y + (h - ART_THUMB) / 2, ART_THUMB, ART_RADIUS);
         left += ART_THUMB + 14;
@@ -184,7 +183,7 @@ static void draw_list(Page *p, int x, int y, int w, int h)
         for (int i = 0; i < p->count; i++) {
             int rh = row_height(p, i);
             if (yy + rh > scroll && yy < scroll + h)
-                draw_row(p, i, x, y + yy - (int)scroll, w, i == p->sel);
+                draw_row(p, i, x, y + yy - (int)scroll, w, i == p->sel && p->style != STYLE_ABOUT);
             yy += rh;
             if (yy > scroll + h)
                 break;
@@ -195,8 +194,7 @@ static void draw_list(Page *p, int x, int y, int w, int h)
             if (thumb < 28)
                 thumb = 28;
             int ty = y + 4 + (int)((track_h - thumb) * (scroll / (total - h)));
-            fill_round(x + w - 8, y + 4, 5, track_h, 2, RGBA(0, 0, 0, 14));
-            fill_round(x + w - 8, ty, 5, thumb, 2, RGBA(0, 0, 0, 90));
+            fill_round(x + w - 7, ty, 4, thumb, 2, RGBA(0, 0, 0, 70));
         }
     }
     SDL_RenderSetClipRect(app.renderer, NULL);
@@ -212,22 +210,6 @@ static double live_elapsed(Player *pl)
     if (pl->duration > 0 && e > pl->duration)
         e = pl->duration;
     return e;
-}
-
-static void draw_reflection(const char *path, const char *fallback, int x, int y, int size)
-{
-    SDL_Texture *t = image_or(path, fallback, size, 12);
-    if (!t)
-        return;
-    const int slices = 18, slice = 3;
-    for (int i = 0; i < slices; i++) {
-        SDL_Rect src = {0, size - (i + 1) * slice, size, slice};
-        SDL_Rect dst = {x, y + i * slice, size, slice};
-        SDL_SetTextureColorMod(t, 255, 255, 255);
-        SDL_SetTextureAlphaMod(t, (Uint8)(70 * (1 - i / (float)slices)));
-        SDL_RenderCopyEx(app.renderer, t, &src, &dst, 0, NULL, SDL_FLIP_VERTICAL);
-    }
-    SDL_SetTextureAlphaMod(t, 255);
 }
 
 static void draw_progress_row(Player *pl, int y)
@@ -282,20 +264,6 @@ static void draw_nowplaying(int x)
         return;
     }
     bool radio = !strcmp(pl->kind, "radio");
-    if (!radio && pl->count) {
-        char counter[64];
-        const char *fmt = S("of", "{pos} of {count}");
-        char pos[12], cnt[12];
-        snprintf(pos, sizeof(pos), "%d", pl->pos);
-        snprintf(cnt, sizeof(cnt), "%d", pl->count);
-        const char *p1 = strstr(fmt, "{pos}"), *p2 = strstr(fmt, "{count}");
-        if (p1 && p2 && p1 < p2)
-            snprintf(counter, sizeof(counter), "%.*s%s%.*s%s%s", (int)(p1 - fmt), fmt, pos,
-                     (int)(p2 - p1 - 5), p1 + 5, cnt, p2 + 7);
-        else
-            snprintf(counter, sizeof(counter), "%s / %s", pos, cnt);
-        draw_text(FONT_REGULAR, FONT_SMALL, counter, x + 36, CONTENT_Y + 12, C_TEXT2, 0);
-    }
     int ix = x + SCREEN_W - 36;
     if (pl->repeat && !radio) {
         draw_icon(pl->single ? "repeat-one" : "repeat", ix - 24, CONTENT_Y + 14, C_ACCENT);
@@ -304,13 +272,11 @@ static void draw_nowplaying(int x)
     if (pl->shuffle && !radio)
         draw_icon("shuffle", ix - 24, CONTENT_Y + 14, C_ACCENT);
 
-    const int art = 250, ax = x + 36, ay = CONTENT_Y + 50;
+    const int art = 272, ax = x + 36, ay = CONTENT_Y + 40;
     const char *fallback = radio ? "art-radio" : "art-default";
-    for (int s = 3; s >= 1; s--)
-        fill_round(ax - s * 2, ay - s * 2 + 6, art + s * 4, art + s * 4, 6 + s * 2, RGBA(0, 0, 0, 10));
+    for (int s = 2; s >= 1; s--)
+        fill_round(ax - s * 3, ay - s * 3 + 8, art + s * 6, art + s * 6, 12 + s * 3, RGBA(0, 0, 0, 9));
     draw_image(pl->art, fallback, ax, ay, art, 12);
-    stroke_round(ax, ay, art, art, 12, 1, RGBA(0, 0, 0, 30));
-    draw_reflection(pl->art, fallback, ax, ay + art + 2, art);
 
     int tx = ax + art + 28, tw = x + SCREEN_W - 30 - tx;
     int title_lines = text_width(FONT_BOLD, FONT_NP_TITLE, pl->title) > tw ? 2 : 1;
@@ -440,13 +406,6 @@ static void draw_panel(Page *p, const char *kind, int px, int py, int pw, int ph
         float u = (el % 24000) / 24000.0f;
         ken_burns(pl->art, radio ? "art-radio" : "art-default", px, py, pw, ph, u < 0.5f ? u * 2 : 2 - u * 2, 2,
                   alpha);
-        fill_gradient(px, py + ph - 170, pw, 170, RGBA(0, 0, 0, 0), RGBA(0, 0, 0, scale_a(185, alpha)));
-        if (pl->title)
-            draw_text(FONT_BOLD, FONT_NP_LINE, pl->title, px + 20, py + ph - 88, RGBA(255, 255, 255, alpha),
-                      pw - 40);
-        if (pl->artist && *pl->artist)
-            draw_text(FONT_REGULAR, FONT_SUB, pl->artist, px + 20, py + ph - 52, RGBA(255, 255, 255, scale_a(205, alpha)),
-                      pw - 40);
         return;
     }
     if (!strcmp(kind, "art") || !strcmp(kind, "now"))
@@ -457,7 +416,6 @@ static void draw_panel(Page *p, const char *kind, int px, int py, int pw, int ph
             tone = &TONES[i];
     fill_gradient(px, py, pw, ph, RGBA(tone->top.r, tone->top.g, tone->top.b, alpha),
                   RGBA(tone->bottom.r, tone->bottom.g, tone->bottom.b, alpha));
-    fill_gradient(px, py, pw, ph / 2, RGBA(255, 255, 255, scale_a(36, alpha)), RGBA(255, 255, 255, 0));
     char name[48];
     snprintf(name, sizeof(name), "glyph-%s", tone->name);
     SDL_Texture *g = icon(name);
@@ -492,8 +450,7 @@ static void draw_preview(Page *p, int x)
     }
     draw_panel(p, p->shown, px, py, pw, ph, (Uint8)(255 * (t < 1 ? t : 1)));
     SDL_RenderSetClipRect(app.renderer, NULL);
-    fill_gradient_h(px - 14, py, 14, ph, RGBA(0, 0, 0, 0), RGBA(0, 0, 0, 30));
-    fill_rect(px - 1, py, 1, ph, RGBA(0, 0, 0, 46));
+    fill_rect(px - 1, py, 1, ph, RGBA(0, 0, 0, 36));
 }
 
 /* cover flow ------------------------------------------------------------- */
@@ -700,20 +657,23 @@ static void draw_sheet_panel(int top, int height, float t)
     fill_rect(0, 0, SCREEN_W, SCREEN_H, RGBA(0, 0, 0, (Uint8)(90 * t)));
     int y = top + (int)((1 - t) * (SCREEN_H - top));
     fill_round(0, y, SCREEN_W, height + 24, 18, C_SHEET);
-    fill_round(SCREEN_W / 2 - 24, y + 8, 48, 5, 3, RGB(200, 200, 205));
 }
 
 static void draw_overlay_page(Page *p)
 {
     float t = overlay_t(p->opened_at, 260);
     int rows = p->loaded ? list_height(p) : ROW_H * 3;
-    int h = 64 + (rows > 330 ? 330 : rows);
+    bool titled = p->title && *p->title;
+    int head = titled ? 62 : 18;
+    int h = head + (rows > 330 ? 330 : rows);
     int top = SCREEN_H - h;
     draw_sheet_panel(top, h, t);
     int y = top + (int)((1 - t) * h);
-    draw_text_center(FONT_SEMIBOLD, FONT_BAR, p->title, SCREEN_W / 2, y + 20, C_TEXT, 400);
-    fill_rect(0, y + 60, SCREEN_W, 1, C_SEP);
-    draw_list(p, 0, y + 62, SCREEN_W, h - 62);
+    if (titled) {
+        draw_text_center(FONT_SEMIBOLD, FONT_BAR, p->title, SCREEN_W / 2, y + 20, C_TEXT, 400);
+        fill_rect(0, y + 60, SCREEN_W, 1, C_SEP);
+    }
+    draw_list(p, 0, y + head, SCREEN_W, h - head);
 }
 
 static void draw_action_sheet(void)
@@ -721,7 +681,7 @@ static void draw_action_sheet(void)
     Sheet *s = &app.sheet;
     float t = overlay_t(s->at, 240);
     bool has_title = s->title && *s->title;
-    int h = (has_title ? 56 : 18) + s->count * ROW_H + 12 + ROW_H + 12;
+    int h = (has_title ? 56 : 18) + s->count * ROW_H + 18;
     int top = SCREEN_H - h;
     draw_sheet_panel(top, h, t);
     int y = top + (int)((1 - t) * h) + (has_title ? 22 : 14);
@@ -729,17 +689,13 @@ static void draw_action_sheet(void)
         draw_text_center(FONT_SEMIBOLD, FONT_HEADER + 1, s->title, SCREEN_W / 2, y, C_TEXT2, 520);
         y += 36;
     }
-    for (int i = 0; i <= s->count; i++) {
-        bool cancel = i == s->count;
-        if (cancel)
-            y += 12;
+    for (int i = 0; i < s->count; i++) {
         bool sel = i == s->sel;
         if (sel)
             draw_selection(0, y, SCREEN_W, ROW_H);
-        const char *label = cancel ? S("cancel", "Cancel") : s->items[i].title;
-        Rgba c = sel ? C_WHITE : (!cancel && s->items[i].destructive ? C_RED : C_ACCENT);
-        draw_text_center(cancel ? FONT_SEMIBOLD : FONT_MEDIUM, FONT_ROW, label, SCREEN_W / 2, y + 9, c, 520);
-        if (!cancel && s->items[i].value)
+        Rgba c = sel ? C_WHITE : (s->items[i].destructive ? C_RED : C_ACCENT);
+        draw_text_center(FONT_MEDIUM, FONT_ROW, s->items[i].title, SCREEN_W / 2, y + 9, c, 520);
+        if (s->items[i].value)
             draw_text_right(FONT_REGULAR, FONT_VALUE, s->items[i].value, SCREEN_W - PAD_X, y + 11,
                             sel ? C_WHITE : C_TEXT2);
         y += ROW_H;
