@@ -1,0 +1,161 @@
+name: aleph H700 image
+
+on:
+  push:
+    branches: [demo]
+    paths-ignore: ["**.md", "aleph/tools/**"]
+  workflow_dispatch:
+
+concurrency:
+  group: aleph-h700-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PROJECT: ROCKNIX
+  DEVICE: H700
+  ARCH: aarch64
+  EMULATION_DEVICE: "no"
+  ENABLE_32BIT: "no"
+  MODULES_PKG: "no"
+  JAVA_HOME: /usr
+  AUTOREMOVE: "yes"
+  DISABLE_COLORS: "yes"
+  CCACHE_COMPILERCHECK: content
+  CCACHE_COMPRESS: 1
+  CCACHE_COMPRESSLEVEL: 6
+  CCACHE_SLOPPINESS: pch_defines,time_macros,include_file_mtime,include_file_ctime
+  BUILDER: ghcr.io/rocknix/rocknix-build:latest
+  BUILD_DIR: build.aleph-H700.aarch64
+
+jobs:
+  toolchain:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 350
+    env:
+      AUTOREMOVE_BLOCK: "gcc glibc libtool flex"
+    steps:
+      - name: Maximize build space
+        uses: justinthelaw/maximize-github-runner-space@v0.9.0
+        with:
+          skip-components: docker-engine
+
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Restore ccache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ env.BUILD_DIR }}/.ccache
+          key: ccache-toolchain-${{ github.sha }}
+          restore-keys: ccache-toolchain-
+
+      - name: Build toolchain
+        run: |
+          ./scripts/get_env > .env
+          for attempt in 1 2 3; do
+            docker run --init --env-file .env --rm --user $(id -u):$(id -g) -v ${PWD}:${PWD} -w ${PWD} \
+              "${BUILDER}" bash -c "./scripts/build_mt toolchain alsa-lib llvm:host" > output.log 2>&1 && exit 0
+            tail -n 40 output.log
+          done
+          exit 1
+
+      - name: Upload logs
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: logs-toolchain
+          path: |
+            output.log
+            ${{ env.BUILD_DIR }}/.threads/logs/
+
+      - name: Save ccache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ env.BUILD_DIR }}/.ccache
+          key: ccache-toolchain-${{ github.sha }}
+
+      - name: Pack build directory
+        run: |
+          rm -rf ${BUILD_DIR}/.ccache
+          sudo tar --zstd --remove-files -cf toolchain.tar.zst ${BUILD_DIR}
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: toolchain
+          path: toolchain.tar.zst
+          retention-days: 3
+          compression-level: 0
+
+  image:
+    needs: toolchain
+    runs-on: ubuntu-24.04
+    timeout-minutes: 350
+    steps:
+      - name: Maximize build space
+        uses: justinthelaw/maximize-github-runner-space@v0.9.0
+        with:
+          skip-components: docker-engine
+
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: toolchain
+
+      - name: Unpack build directory
+        run: |
+          tar --zstd -xf toolchain.tar.zst
+          rm toolchain.tar.zst
+
+      - name: Restore ccache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ env.BUILD_DIR }}/.ccache
+          key: ccache-image-${{ github.sha }}
+          restore-keys: ccache-image-
+
+      - name: Build image
+        run: |
+          ./scripts/get_env > .env
+          for attempt in 1 2 3; do
+            docker run --init --env-file .env --rm --user $(id -u):$(id -g) -v ${PWD}:${PWD} -w ${PWD} \
+              "${BUILDER}" bash -c "./scripts/build_distro" > output.log 2>&1 && exit 0
+            tail -n 60 output.log
+          done
+          exit 1
+
+      - name: Upload logs
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: logs-image
+          path: |
+            output.log
+            ${{ env.BUILD_DIR }}/.threads/logs/
+
+      - name: Save ccache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ env.BUILD_DIR }}/.ccache
+          key: ccache-image-${{ github.sha }}
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: aleph-H700-images
+          path: |
+            target/aleph-*.img.gz
+            target/aleph-*.img.gz.sha256
+          compression-level: 0
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: aleph-H700-update
+          path: |
+            target/aleph-*.tar
+            target/aleph-*.tar.sha256
+          compression-level: 0
