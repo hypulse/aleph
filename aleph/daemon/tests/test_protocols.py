@@ -235,6 +235,8 @@ class RadioTest(unittest.IsolatedAsyncioTestCase):
     def test_station_shape(self):
         s = station_from_api({"stationuuid": "x", "name": " Jazz ", "url": "http://j", "codec": "UNKNOWN"})
         self.assertEqual((s["name"], s["url"], s["bitrate"], s["codec"]), ("Jazz", "http://j", 0, ""))
+        hls = station_from_api({"stationuuid": "y", "url_resolved": "https://x/playlist.m3u8", "hls": 1})
+        self.assertEqual(hls["url"], "hls+https://x/playlist.m3u8")
 
 
 if __name__ == "__main__":

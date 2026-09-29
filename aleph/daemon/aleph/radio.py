@@ -30,10 +30,13 @@ class RadioError(Exception):
 def station_from_api(raw):
     tags = [t.strip() for t in (raw.get("tags") or "").split(",") if t.strip()][:3]
     codec = (raw.get("codec") or "").strip()
+    url = raw.get("url_resolved") or raw.get("url", "")
+    if str(raw.get("hls")) in ("1", "True", "true") and url.startswith(("http://", "https://")):
+        url = "hls+" + url  # MPD plays live HLS through FFmpeg only under this scheme
     return {
         "uuid": raw.get("stationuuid", ""),
         "name": (raw.get("name") or "").strip() or "Radio",
-        "url": raw.get("url_resolved") or raw.get("url", ""),
+        "url": url,
         "favicon": raw.get("favicon") or "",
         "tags": tags,
         "country": raw.get("countrycode") or "",

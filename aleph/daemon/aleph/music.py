@@ -10,7 +10,7 @@ from .util import matches, sort_key, spawn
 
 log = logging.getLogger("aleph.music")
 
-STREAM_PREFIXES = ("http://", "https://")
+STREAM_PREFIXES = ("http://", "https://", "hls+http://", "hls+https://")
 
 
 def _int(value, default=0):

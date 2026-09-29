@@ -418,7 +418,7 @@ class Pages:
             detail = " · ".join(filter(None, [", ".join(s["tags"][:2]),
                                               f"{s['codec']} {s['bitrate']}k" if s["bitrate"] else s["codec"]]))
             items.append(item(f"st{i}", s["name"], "star" if self.app.radio.is_favorite(s["uuid"]) else "none",
-                              subtitle=detail or None, art=self._icon_path(s)))
+                              subtitle=detail or self.t("live"), art=self._icon_path(s)))
         self._prefetch_icons(path, stations)
         return items
 
