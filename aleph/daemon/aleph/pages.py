@@ -1,0 +1,754 @@
+import asyncio
+import logging
+import os
+import secrets
+
+from .radio import RadioError
+from .system import human_size
+from .util import enc, spawn, split_path
+
+log = logging.getLogger("aleph.pages")
+
+VIDEO_EXTS = (".mp4", ".mkv", ".avi", ".mov", ".webm", ".m4v", ".ts", ".mpg", ".mpeg", ".wmv")
+TIMEOUTS = (15, 30, 60, 120, 300, 0)
+LIMITS = (100, 90, 80, 70, 60, 50)
+
+
+def item(key, title, accessory="chevron", **extra):
+    out = {"key": key, "title": title, "accessory": accessory}
+    out.update({k: v for k, v in extra.items() if v is not None})
+    return out
+
+
+def header(title):
+    return {"header": True, "title": title}
+
+
+def page(path, title, items, **extra):
+    out = {"path": path, "title": title, "items": items, "style": "list"}
+    out.update({k: v for k, v in extra.items() if v is not None})
+    return out
+
+
+class Pages:
+    def __init__(self, app):
+        self.app = app
+        self._tokens = {}
+        self._stations = {}
+        self._art_jobs = set()
+
+    @property
+    def t(self):
+        return self.app.t
+
+    def _token(self, fn):
+        token = secrets.token_hex(6)
+        self._tokens[token] = fn
+        return token
+
+    def _duration_label(self, seconds):
+        if seconds == 0:
+            return self.t("never")
+        if seconds < 60:
+            return self.t("seconds", n=seconds)
+        return self.t("minutes", n=seconds // 60)
+
+    # entry points ------------------------------------------------------------
+
+    async def build(self, path):
+        parts = split_path(path)
+        handler = getattr(self, "_page_" + (parts[0] if parts else "root"), None)
+        if handler is None:
+            return page(path, "", [], empty={"title": self.t("empty_list")})
+        return await handler(path, parts[1:])
+
+    async def activate(self, path, key):
+        parts = split_path(path)
+        handler = getattr(self, "_do_" + (parts[0] if parts else "root"), None)
+        if handler is None:
+            return {"none": True}
+        return await handler(path, parts[1:], key) or {"none": True}
+
+    async def alt(self, path, key):
+        parts = split_path(path)
+        handler = getattr(self, "_alt_" + (parts[0] if parts else "root"), None)
+        if handler is None:
+            return {"none": True}
+        return await handler(path, parts[1:], key) or {"none": True}
+
+    async def resolve(self, token, value=None):
+        fn = self._tokens.pop(token, None)
+        if fn is None:
+            return {"none": True}
+        result = fn(value) if value is not None else fn()
+        if asyncio.iscoroutine(result):
+            result = await result
+        return result or {"none": True}
+
+    async def slider(self, path, value):
+        if path == "/settings/display/brightness":
+            self.app.settings.set("brightness", int(value))
+            self.app.power.apply_brightness()
+
+    def leave(self, path):
+        if path in ("/settings/bluetooth",):
+            self.app.bluetooth.end_discovery()
+
+    # root --------------------------------------------------------------------
+
+    async def _page_root(self, path, rest):
+        t = self.t
+        items = [
+            item("music", t("music")),
+            item("radio", t("radio")),
+            item("videos", t("videos")),
+            item("books", t("books")),
+            item("games", t("games")),
+            item("settings", t("settings")),
+            item("shuffle", t("shuffle_songs"), "none"),
+        ]
+        player = self.app.state.get("player")
+        if player["count"] or player["state"] != "stop":
+            items.append(item("nowplaying", t("now_playing")))
+        apps = self.app.state.get("apps")
+        if apps:
+            items.append(header(t("open_apps")))
+            for a in apps:
+                items.append(item(f"app:{a['key']}", a["title"], "none",
+                                  value=t("paused_app") if a["frozen"] else None))
+        return page("/", "aleph", items, live=True)
+
+    async def _do_root(self, path, rest, key):
+        if key == "shuffle":
+            if not self.app.music.songs:
+                return {"push": "/music/songs"}
+            await self.app.music.shuffle_all()
+            return {"nowplaying": True}
+        if key == "nowplaying":
+            return {"nowplaying": True}
+        if key == "books":
+            spec = self.app.catalog["koreader"]
+            if spec.available():
+                await self.app.launch(spec, self.t("books"))
+                return {"none": True}
+            return {"push": "/books"}
+        if key.startswith("app:"):
+            await self.app.apps.resume(key[4:])
+            return {"none": True}
+        return {"push": "/" + key}
+
+    async def _alt_root(self, path, rest, key):
+        if key.startswith("app:"):
+            app_key = key[4:]
+            return {"sheet": {"title": "", "token": self._token(
+                lambda choice: self._app_sheet(app_key, choice)),
+                "items": [{"key": "close", "title": self.t("close_app"), "destructive": True}]}}
+
+    async def _app_sheet(self, app_key, choice):
+        if choice == "close":
+            await self.app.apps.close(app_key)
+        return {"reload": True}
+
+    # music -------------------------------------------------------------------
+
+    def _empty_music(self):
+        return {"title": self.t("no_music_title"), "text": self.t("no_music_text")}
+
+    def _song_items(self, songs, playing_file=None):
+        return [item(f"s{i}", s["title"], "playing" if s["file"] == playing_file else "none")
+                for i, s in enumerate(songs)]
+
+    async def _songs_for(self, rest):
+        m = self.app.music
+        kind = rest[0] if rest else ""
+        if kind == "songs":
+            return m.all_songs()
+        if kind == "album" and len(rest) >= 3:
+            return m.album_songs(rest[1], rest[2])
+        if kind == "artist" and len(rest) >= 3 and rest[2] == "all":
+            return m.artist_songs(rest[1])
+        if kind == "genre" and len(rest) >= 2:
+            return m.genre_songs(rest[1])
+        if kind == "playlist" and len(rest) >= 2:
+            return await m.playlist_songs(rest[1])
+        return None
+
+    async def _page_music(self, path, rest):
+        t = self.t
+        m = self.app.music
+        playing = self.app.state.get("player").get("file")
+        if not rest:
+            items = [item("playlists", t("playlists")), item("artists", t("artists")),
+                     item("albums", t("albums")), item("songs", t("songs")),
+                     item("genres", t("genres")), item("queue", t("up_next"))]
+            return page(path, t("music"), items)
+        kind = rest[0]
+        if kind == "artists":
+            names = m.artists()
+            items = [item("a:" + n, n or t("unknown_artist")) for n in names]
+            return page(path, t("artists"), items, empty=self._empty_music(), index=True)
+        if kind == "artist" and len(rest) == 2:
+            artist = rest[1]
+            albums = m.albums(artist=artist)
+            items = [item("all", t("all_songs"))]
+            items += [item(f"al:{i}", album or t("unknown_album"), art=self._album_art(file),
+                           subtitle=t("n_songs", n=len(m.album_songs(a, album))))
+                      for i, ((a, album), file) in enumerate(albums)]
+            self._prefetch_art(path, [f for _, f in albums])
+            return page(path, artist or t("unknown_artist"), items, rows="tall")
+        if kind == "albums":
+            albums = m.albums()
+            items = [item(f"al:{i}", album or t("unknown_album"), subtitle=a or t("unknown_artist"),
+                          art=self._album_art(file))
+                     for i, ((a, album), file) in enumerate(albums)]
+            self._prefetch_art(path, [f for _, f in albums])
+            return page(path, t("albums"), items, empty=self._empty_music(), rows="tall", index=True)
+        if kind == "genres":
+            items = [item("g:" + g, g) for g in m.genres()]
+            return page(path, t("genres"), items, empty=self._empty_music())
+        if kind == "playlists":
+            items = [item("p:" + p, p) for p in await m.playlists()]
+            return page(path, t("playlists"), items,
+                        empty={"title": t("empty_list")})
+        if kind == "queue":
+            songs = await m.queue()
+            pos = self.app.state.get("player")["pos"]
+            items = [item(f"q{i}", s["title"], "playing" if i + 1 == pos else "none",
+                          subtitle=s["artist"] or None) for i, s in enumerate(songs)]
+            return page(path, t("up_next"), items, empty={"title": t("nothing_playing")},
+                        selected=max(pos - 1, 0), rows="tall", live=True)
+        songs = await self._songs_for(rest)
+        if songs is None:
+            return page(path, "", [])
+        titles = {"songs": t("songs"), "album": rest[-1] if len(rest) > 2 else "",
+                  "artist": rest[1] if len(rest) > 1 else "", "genre": rest[-1], "playlist": rest[-1]}
+        return page(path, titles.get(kind) or t("unknown_album"),
+                    self._song_items(songs, playing), empty=self._empty_music(),
+                    index=kind == "songs", live=True)
+
+    async def _do_music(self, path, rest, key):
+        m = self.app.music
+        if not rest:
+            return {"push": f"/music/{key}"}
+        kind = rest[0]
+        if kind == "artists":
+            return {"push": "/music/artist/" + enc(key[2:])}
+        if kind == "artist" and len(rest) == 2:
+            if key == "all":
+                return {"push": path + "/all"}
+            (artist, album), _ = m.albums(artist=rest[1])[int(key[3:])]
+            return {"push": "/music/album/" + enc(artist, album)}
+        if kind == "albums":
+            (artist, album), _ = m.albums()[int(key[3:])]
+            return {"push": "/music/album/" + enc(artist, album)}
+        if kind == "genres":
+            return {"push": "/music/genre/" + enc(key[2:])}
+        if kind == "playlists":
+            return {"push": "/music/playlist/" + enc(key[2:])}
+        if kind == "queue":
+            await m.play_position(int(key[1:]))
+            return {"nowplaying": True}
+        songs = await self._songs_for(rest)
+        if songs and key.startswith("s"):
+            await m.play_songs(songs, int(key[1:]))
+            return {"nowplaying": True}
+
+    async def _alt_music(self, path, rest, key):
+        songs = await self._songs_for(rest)
+        if not songs or not key.startswith("s"):
+            return None
+        song = songs[int(key[1:])]
+        options = [{"key": "next", "title": self.t("play_next")},
+                   {"key": "later", "title": self.t("add_to_up_next")}]
+        if rest[0] != "album":
+            options.append({"key": "album", "title": self.t("go_to_album")})
+
+        async def choose(choice):
+            if choice in ("next", "later"):
+                await self.app.music.enqueue(song, next_up=choice == "next")
+                self.app.toast(self.t("added_up_next"), "music")
+                return {"none": True}
+            if choice == "album":
+                return {"push": "/music/album/" + enc(song["albumartist"], song["album"])}
+        return {"sheet": {"title": song["title"], "items": options, "token": self._token(choose)}}
+
+    def _album_art(self, file):
+        return self.app.music._art_for(file)
+
+    def _prefetch_art(self, path, files):
+        missing = [f for f in files if not self.app.music._art_for(f)]
+        if not missing or path in self._art_jobs:
+            return
+        self._art_jobs.add(path)
+
+        async def job():
+            try:
+                found = False
+                for f in missing[:60]:
+                    if await self.app.music.art_path(f):
+                        found = True
+                if found:
+                    self.app.page_changed(path)
+            finally:
+                self._art_jobs.discard(path)
+        spawn(job())
+
+    # now playing -------------------------------------------------------------
+
+    async def _page_nowplaying(self, path, rest):
+        return {"path": path, "title": self.t("now_playing"), "style": "nowplaying", "items": []}
+
+    async def now_playing_options(self):
+        t = self.t
+        player = self.app.state.get("player")
+        if player["kind"] == "radio":
+            station = self.app.music.station
+            if not station:
+                return {"none": True}
+            fav = self.app.radio.is_favorite(station["uuid"])
+            options = [{"key": "fav", "title": t("remove_favorite") if fav else t("add_favorite")}]
+        else:
+            repeat = t("repeat_one") if player["single"] else t("repeat") if player["repeat"] else t("off")
+            options = [
+                {"key": "shuffle", "title": t("shuffle"), "value": t("on") if player["shuffle"] else t("off")},
+                {"key": "repeat", "title": t("repeat"), "value": repeat if player["repeat"] else t("off")},
+                {"key": "queue", "title": t("up_next")},
+            ]
+            if player["album"]:
+                options.append({"key": "album", "title": t("go_to_album")})
+
+        async def choose(choice):
+            m = self.app.music
+            if choice == "fav" and m.station:
+                added = self.app.radio.toggle_favorite(m.station)
+                self.app.toast(t("added_favorite") if added else t("removed_favorite"), "star")
+            elif choice == "shuffle":
+                await m.set_shuffle(not player["shuffle"])
+            elif choice == "repeat":
+                await m.cycle_repeat()
+            elif choice == "queue":
+                return {"push": "/music/queue"}
+            elif choice == "album":
+                song = next((s for s in m.songs if s["file"] == player.get("file")), None)
+                if song:
+                    return {"push": "/music/album/" + enc(song["albumartist"], song["album"])}
+            return {"none": True}
+        return {"sheet": {"title": player["title"], "items": options, "token": self._token(choose)}}
+
+    # radio -------------------------------------------------------------------
+
+    def _station_items(self, path, stations):
+        self._stations[path] = stations
+        items = []
+        for i, s in enumerate(stations):
+            detail = " · ".join(filter(None, [", ".join(s["tags"][:2]),
+                                              f"{s['codec']} {s['bitrate']}k" if s["bitrate"] else s["codec"]]))
+            items.append(item(f"st{i}", s["name"], "star" if self.app.radio.is_favorite(s["uuid"]) else "none",
+                              subtitle=detail or None, art=self._icon_path(s)))
+        self._prefetch_icons(path, stations)
+        return items
+
+    def _icon_path(self, station):
+        return self.app.radio.cached_icon(station)
+
+    def _prefetch_icons(self, path, stations):
+        missing = [s for s in stations[:40] if s.get("favicon") and not self._icon_path(s)]
+        if not missing or ("icons", path) in self._art_jobs:
+            return
+        self._art_jobs.add(("icons", path))
+
+        async def job():
+            try:
+                results = await asyncio.gather(*(self.app.radio.icon(s) for s in missing))
+                if any(results):
+                    self.app.page_changed(path)
+            finally:
+                self._art_jobs.discard(("icons", path))
+        spawn(job())
+
+    async def _page_radio(self, path, rest):
+        t = self.t
+        r = self.app.radio
+        if not rest:
+            items = [item("favorites", t("favorites"), value=str(len(r.favorites)) if r.favorites else None),
+                     item("top", t("top_stations")), item("country/KR", t("korea")),
+                     item("countries", t("by_country")), item("search", t("search"))]
+            return page(path, t("radio"), items)
+        kind = rest[0]
+        net_error = {"title": t("network_error"), "text": t("network_error_text")}
+        try:
+            if kind == "favorites":
+                items = self._station_items(path, list(r.favorites))
+                return page(path, t("favorites"), items, rows="tall", live=True,
+                            empty={"title": t("no_favorites_title"), "text": t("no_favorites_text")})
+            if kind == "top":
+                return page(path, t("top_stations"), self._station_items(path, await r.top()),
+                            rows="tall", empty=net_error)
+            if kind == "country" and len(rest) >= 2:
+                title = rest[2] if len(rest) > 2 else (t("korea") if rest[1] == "KR" else rest[1])
+                return page(path, title, self._station_items(path, await r.by_country(rest[1])),
+                            rows="tall", empty={"title": t("no_results")})
+            if kind == "countries":
+                items = [item(f"c:{code}:{name}", name, value=str(n)) for code, name, n in await r.countries()]
+                return page(path, t("by_country"), items, empty=net_error)
+            if kind == "search" and len(rest) >= 2:
+                return page(path, rest[1], self._station_items(path, await r.search(rest[1])),
+                            rows="tall", empty={"title": t("no_results")})
+        except RadioError:
+            return page(path, t("radio"), [], empty=net_error)
+        return page(path, t("radio"), [])
+
+    async def _do_radio(self, path, rest, key):
+        if not rest:
+            if key == "search":
+                return {"input": {"title": self.t("search"), "placeholder": self.t("search_prompt"),
+                                  "token": self._token(self._radio_search)}}
+            return {"push": "/radio/" + key}
+        if rest[0] == "countries":
+            _, code, name = key.split(":", 2)
+            return {"push": "/radio/country/" + enc(code, name)}
+        stations = self._stations.get(path) or []
+        if key.startswith("st") and int(key[2:]) < len(stations):
+            station = dict(stations[int(key[2:])])
+            station["art"] = self._icon_path(station)
+            await self.app.music.play_stream(station)
+            self.app.radio.report_click(station)
+            return {"nowplaying": True}
+
+    def _radio_search(self, text):
+        text = (text or "").strip()
+        return {"push": "/radio/search/" + enc(text)} if text else {"none": True}
+
+    async def _alt_radio(self, path, rest, key):
+        stations = self._stations.get(path) or []
+        if key.startswith("st") and int(key[2:]) < len(stations):
+            added = self.app.radio.toggle_favorite(stations[int(key[2:])])
+            self.app.toast(self.t("added_favorite") if added else self.t("removed_favorite"), "star")
+            return {"reload": True}
+
+    # videos, books, games ----------------------------------------------------
+
+    def _video_dir(self, rest):
+        root = self.app.paths["videos"]
+        path = os.path.normpath(os.path.join(root, *rest))
+        return path if path.startswith(root) else root
+
+    async def _page_videos(self, path, rest):
+        folder = self._video_dir(rest)
+        items = []
+        try:
+            entries = sorted(os.scandir(folder), key=lambda e: (not e.is_dir(), e.name.casefold()))
+        except OSError:
+            entries = []
+        for e in entries:
+            if e.name.startswith("."):
+                continue
+            if e.is_dir():
+                items.append(item("d:" + e.name, e.name))
+            elif e.name.lower().endswith(VIDEO_EXTS):
+                items.append(item("f:" + e.name, os.path.splitext(e.name)[0], "none"))
+        title = rest[-1] if rest else self.t("videos")
+        return page(path, title, items,
+                    empty={"title": self.t("no_videos_title"), "text": self.t("no_videos_text")})
+
+    async def _do_videos(self, path, rest, key):
+        if key.startswith("d:"):
+            return {"push": path.rstrip("/") + "/" + enc(key[2:])}
+        if key.startswith("f:"):
+            file = os.path.join(self._video_dir(rest), key[2:])
+            await self.app.launch(self.app.catalog["video"], os.path.splitext(key[2:])[0], [file])
+            return {"none": True}
+
+    async def _page_books(self, path, rest):
+        spec = self.app.catalog["koreader"]
+        items = [item("open", "KOReader", "none")] if spec.available() else []
+        return page(path, self.t("books"), items,
+                    empty={"title": self.t("no_books_title"), "text": self.t("no_books_text")})
+
+    async def _do_books(self, path, rest, key):
+        await self.app.launch(self.app.catalog["koreader"], self.t("books"))
+
+    async def _page_games(self, path, rest):
+        items = [item(key, spec.title_key, "none") for key, spec in self.app.catalog.items()
+                 if key in ("portmaster", "retroarch") and spec.available()]
+        return page(path, self.t("games"), items,
+                    empty={"title": self.t("no_games_title"), "text": self.t("no_games_text")})
+
+    async def _do_games(self, path, rest, key):
+        spec = self.app.catalog.get(key)
+        if spec:
+            await self.app.launch(spec, spec.title_key)
+
+    # settings ----------------------------------------------------------------
+
+    async def _page_settings(self, path, rest):
+        handler = getattr(self, "_settings_" + "_".join(rest), None) if rest else None
+        if rest and handler is None:
+            return page(path, "", [])
+        return await handler(path) if handler else await self._settings_root(path)
+
+    async def _settings_root(self, path):
+        t = self.t
+        s = self.app.state
+        wifi = s.get("wifi")
+        bt = s.get("bluetooth")
+        lang = {"ko": "한국어", "en": "English"}[self.app.settings["lang"]]
+        items = [
+            item("wifi", t("wifi"), value=wifi["ssid"] if wifi["ssid"] else (t("on") if wifi["enabled"] else t("off"))),
+            item("bluetooth", t("bluetooth"), value=bt["audio"] or (t("on") if bt["enabled"] else t("off"))),
+            item("sound", t("sound")),
+            item("display", t("display")),
+            item("power", t("power")),
+            item("language", t("language"), value=lang),
+            item("about", t("about")),
+        ]
+        return page(path, t("settings"), items, live=True)
+
+    async def _settings_wifi(self, path):
+        t = self.t
+        w = self.app.wifi
+        items = [item("toggle", t("wifi"), "switch", on=w.enabled)]
+        if w.enabled:
+            items.append(header(t("choose_network")))
+            for n in w.networks():
+                accessory = "spinner" if w.busy == n["ssid"] else "check" if n["active"] else "none"
+                items.append(item("n:" + n["ssid"], n["ssid"], accessory, lock=n["secure"],
+                                  signal=min(3, n["signal"] // 25)))
+            items.append(item("saved", t("saved_networks")))
+            w.scan_if_stale()
+        return page(path, t("wifi"), items, live=True)
+
+    async def _settings_wifi_saved(self, path):
+        items = [item("u:" + s["uuid"], s["name"], "none") for s in self.app.wifi.saved()]
+        return page(path, self.t("saved_networks"), items,
+                    empty={"title": self.t("no_saved_networks")}, live=True)
+
+    async def _settings_bluetooth(self, path):
+        t = self.t
+        b = self.app.bluetooth
+        items = [item("toggle", t("bluetooth"), "switch", on=b.enabled)]
+        if b.enabled:
+            mine = b.my_devices()
+            if mine:
+                items.append(header(t("my_devices")))
+                for d in mine:
+                    busy = d.path in b.busy
+                    items.append(item("d:" + d.path, d.name, "spinner" if busy else "none",
+                                      value=None if busy else (t("connected") if d.connected else t("not_connected")),
+                                      icon=d.kind))
+            items.append(header(t("other_devices")))
+            for d in b.other_devices():
+                busy = d.path in b.busy
+                items.append(item("d:" + d.path, d.name, "spinner" if busy else "none", icon=d.kind))
+            items.append({"header": True, "title": t("searching"), "spinner": True})
+            b.begin_discovery()
+        return page(path, t("bluetooth"), items, live=True)
+
+    async def _settings_sound(self, path):
+        t = self.t
+        st = self.app.settings
+        limit = st["volume_limit"]
+        items = [
+            item("limit", t("volume_limit"), value=t("no_limit") if limit >= 100 else f"{limit}%"),
+            item("pause_on_disconnect", t("pause_on_disconnect"), "switch", on=st["pause_on_disconnect"]),
+            item("pause_on_unplug", t("pause_on_unplug"), "switch", on=st["pause_on_unplug"]),
+        ]
+        return page(path, t("sound"), items)
+
+    async def _settings_sound_limit(self, path):
+        current = self.app.settings["volume_limit"]
+        items = [item(f"l{v}", self.t("no_limit") if v == 100 else f"{v}%",
+                      "check" if v == current else "none") for v in LIMITS]
+        return page(path, self.t("volume_limit"), items)
+
+    async def _settings_display(self, path):
+        t = self.t
+        st = self.app.settings
+        items = [item("brightness", t("brightness"), value=f"{st['brightness']}%"),
+                 item("timeout", t("screen_timeout"), value=self._duration_label(st["screen_timeout"]))]
+        return page(path, t("display"), items)
+
+    async def _settings_display_brightness(self, path):
+        return {"path": path, "title": self.t("brightness"), "style": "slider", "items": [],
+                "value": self.app.settings["brightness"], "min": 5, "max": 100, "step": 5}
+
+    async def _settings_display_timeout(self, path):
+        current = self.app.settings["screen_timeout"]
+        items = [item(f"t{v}", self._duration_label(v), "check" if v == current else "none")
+                 for v in TIMEOUTS]
+        return page(path, self.t("screen_timeout"), items)
+
+    async def _settings_power(self, path):
+        t = self.t
+        keep = self.app.settings["lid_keep_playing"]
+        items = [item("lid", t("when_lid_closes"), value=t("lid_keep") if keep else t("lid_sleep")),
+                 item("sleep", t("sleep_now"), "none"),
+                 item("restart", t("restart"), "none"),
+                 item("shutdown", t("shut_down"), "none")]
+        return page(path, t("power"), items)
+
+    async def _settings_power_lid(self, path):
+        keep = self.app.settings["lid_keep_playing"]
+        items = [item("keep", self.t("lid_keep"), "check" if keep else "none"),
+                 item("sleep", self.t("lid_sleep"), "none" if keep else "check")]
+        return page(path, self.t("when_lid_closes"), items)
+
+    async def _settings_language(self, path):
+        lang = self.app.settings["lang"]
+        items = [item("ko", "한국어", "check" if lang == "ko" else "none"),
+                 item("en", "English", "check" if lang == "en" else "none")]
+        return page(path, self.t("language"), items)
+
+    async def _settings_about(self, path):
+        t = self.t
+        info = self.app.system.about(self.app.paths["music"])
+        m = self.app.music
+        battery = self.app.state.get("battery")
+        rows = [
+            ("name", "aleph"),
+            ("songs", str(len(m.songs))),
+            ("albums", str(len(m.albums()))),
+            ("capacity", human_size(info["capacity"])),
+            ("available", human_size(info["available"])),
+            ("battery", f"{battery['percent']}%"),
+            ("ip_address", info["ip"] or "—"),
+            ("bt_address", self.app.bluetooth.backend.address or "—"),
+            ("model", info["model"]),
+            ("version", info["version"] + (f" ({info['software']})" if info["software"] else "")),
+        ]
+        items = [item(k, t(k), "none", value=v) for k, v in rows]
+        return page(path, t("about"), items, style="about")
+
+    async def _do_settings(self, path, rest, key):
+        t = self.t
+        st = self.app.settings
+        sub = "/".join(rest)
+        if not rest:
+            return {"push": f"/settings/{key}"}
+        if sub == "wifi":
+            if key == "toggle":
+                await self.app.wifi.set_enabled(not self.app.wifi.enabled)
+                return {"reload": True}
+            if key == "saved":
+                return {"push": "/settings/wifi/saved"}
+            ssid = key[2:]
+            net = next((n for n in self.app.wifi.networks() if n["ssid"] == ssid), None)
+            if net and net["active"]:
+                return {"none": True}
+            if net and net["secure"] and not self.app.wifi.saved_for(ssid):
+                return {"input": {"title": t("password_for", ssid=ssid), "secret": True,
+                                  "token": self._token(lambda pw: self._join(ssid, pw))}}
+            spawn(self.app.wifi.join(ssid))
+            return {"reload": True}
+        if sub == "wifi/saved":
+            saved = next((s for s in self.app.wifi.saved() if s["uuid"] == key[2:]), None)
+            if saved:
+                spawn(self.app.wifi.join(saved["name"]))
+            return {"back": True}
+        if sub == "bluetooth":
+            if key == "toggle":
+                await self.app.bluetooth.set_enabled(not self.app.bluetooth.enabled)
+                return {"reload": True}
+            spawn(self.app.bluetooth.activate(key[2:]))
+            return {"reload": True}
+        if sub == "sound":
+            if key == "limit":
+                return {"push": "/settings/sound/limit"}
+            st.set(key, not st[key])
+            return {"reload": True}
+        if sub == "sound/limit":
+            st.set("volume_limit", int(key[1:]))
+            await self.app.audio.clamp_to_limit()
+            return {"back": True}
+        if sub == "display":
+            return {"push": f"/settings/display/{key}"}
+        if sub == "display/timeout":
+            st.set("screen_timeout", int(key[1:]))
+            self.app.power.poke()
+            return {"back": True}
+        if sub == "power":
+            if key == "lid":
+                return {"push": "/settings/power/lid"}
+            if key == "sleep":
+                spawn(self.app.power.sleep())
+                return {"none": True}
+            question = t("restart_q") if key == "restart" else t("shut_down_q")
+            action = self.app.power.restart if key == "restart" else self.app.power.shut_down
+            return {"confirm": {"title": question, "ok": t("restart") if key == "restart" else t("shut_down"),
+                                "destructive": True, "token": self._token(lambda: self._power_action(action))}}
+        if sub == "power/lid":
+            st.set("lid_keep_playing", key == "keep")
+            await self.app.power.playback_changed()
+            return {"back": True}
+        if sub == "language":
+            st.set("lang", key)
+            self.app.set_language(key)
+            return {"relabel": True, "back": True}
+        return {"none": True}
+
+    def _power_action(self, action):
+        spawn(action())
+        return {"none": True}
+
+    async def _join(self, ssid, password):
+        spawn(self.app.wifi.join(ssid, password))
+        return {"none": True}
+
+    async def _alt_settings(self, path, rest, key):
+        t = self.t
+        sub = "/".join(rest)
+        if sub == "wifi/saved" and key.startswith("u:"):
+            saved = next((s for s in self.app.wifi.saved() if s["uuid"] == key[2:]), None)
+            if saved:
+                return {"confirm": {"title": t("forget_network_q", name=saved["name"]), "ok": t("forget"),
+                                    "destructive": True,
+                                    "token": self._token(lambda: self._forget_wifi(saved["uuid"]))}}
+        if sub == "bluetooth" and key.startswith("d:"):
+            dev = self.app.bluetooth.find(key[2:])
+            if dev and dev.paired:
+                options = [{"key": "toggle", "title": t("disconnect") if dev.connected else t("connect")},
+                           {"key": "forget", "title": t("forget"), "destructive": True}]
+                return {"sheet": {"title": dev.name, "items": options,
+                                  "token": self._token(lambda c: self._device_choice(dev.path, c))}}
+
+    async def _forget_wifi(self, uuid):
+        await self.app.wifi.forget(uuid)
+        return {"reload": True}
+
+    async def _device_choice(self, dev_path, choice):
+        if choice == "toggle":
+            spawn(self.app.bluetooth.activate(dev_path))
+        elif choice == "forget":
+            await self.app.bluetooth.forget(dev_path)
+        return {"reload": True}
+
+    # control center --------------------------------------------------------
+
+    async def _page_control(self, path, rest):
+        t = self.t
+        b = self.app.bluetooth
+        items = []
+        if b.enabled:
+            for d in b.recent_audio():
+                busy = d.path in b.busy
+                items.append(item("d:" + d.path, d.name, "spinner" if busy else "none", icon="audio",
+                                  value=None if busy else (t("connected") if d.connected else t("not_connected"))))
+        wifi = self.app.state.get("wifi")
+        items += [
+            item("bluetooth", t("bluetooth"), value=t("on") if b.enabled else t("off")),
+            item("wifi", t("wifi"), value=wifi["ssid"] or (t("on") if wifi["enabled"] else t("off"))),
+            item("brightness", t("brightness"), value=f"{self.app.settings['brightness']}%"),
+            item("sleep", t("sleep_now"), "none"),
+        ]
+        return page(path, t("control_center"), items, presentation="sheet", live=True)
+
+    async def _do_control(self, path, rest, key):
+        if key.startswith("d:"):
+            spawn(self.app.bluetooth.activate(key[2:]))
+            return {"reload": True}
+        if key == "sleep":
+            spawn(self.app.power.sleep())
+            return {"dismiss": True}
+        target = {"bluetooth": "/settings/bluetooth", "wifi": "/settings/wifi",
+                  "brightness": "/settings/display/brightness"}[key]
+        return {"dismiss": True, "push": target}
