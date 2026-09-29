@@ -15,19 +15,19 @@ PKG_DEPENDS_TARGET="toolchain squashfs-tools:host dosfstools:host fakeroot:host 
                     bash coreutils system-utils autostart quirks powerstate sdl2notify \
                     gzip six xmlstarlet pyudev dialog network mako-osd rocknix"
 
-PKG_UI="emulationstation es-themes textviewer lowerdeck"
+PKG_UI=""
 
-PKG_UI_TOOLS="fbgrab grim"
+PKG_UI_TOOLS="grim"
 
-PKG_GRAPHICS="imagemagick"
+PKG_GRAPHICS=""
 
-PKG_FONTS="corefonts noto-sans-cjk"
+PKG_FONTS="noto-sans-cjk"
 
-PKG_MULTIMEDIA="ffmpeg vlc mpv gmu m8c"
+PKG_MULTIMEDIA="ffmpeg mpv"
 
-PKG_SOUND="espeak libao"
+PKG_SOUND=""
 
-PKG_SYNC="synctools"
+PKG_SYNC=""
 
 PKG_TOOLS="patchelf i2c-tools evtest"
 
@@ -40,15 +40,6 @@ then
   PKG_DEPENDS_TARGET+=" ${PKG_TOOLS} ${PKG_FONTS} misc-packages"
 else
   PKG_DEPENDS_TARGET+=" ${PKG_TOOLS} ${PKG_FONTS} ${PKG_SOUND} ${PKG_SYNC} ${PKG_GRAPHICS} ${PKG_UI} ${PKG_UI_TOOLS} ${PKG_MULTIMEDIA} misc-packages"
-
-  # GL demos and tools
-  [[ ! -z "${OPENGL_SUPPORT}" ]] && PKG_DEPENDS_TARGET+=" mesa-demos"
-
-  # GLmark2
-  [[ ! -z "${OPENGLES_SUPPORT}" ]] && PKG_DEPENDS_TARGET+=" glmark2"
-
-  # Vulkan demos and tools
-  [ "${VULKAN_SUPPORT}" = "yes" ] && PKG_DEPENDS_TARGET+=" vkmark"
 
   # Weston kiosk shell dpms support.
   [ "${WINDOWMANAGER}" = "weston" ] && PKG_DEPENDS_TARGET+=" weston-kiosk-shell-dpms"
@@ -105,9 +96,7 @@ fi
 # Batteryplus voltage-based battery percentage daemon
 [ "${BATTERYPLUS_SUPPORT}" = "yes" ] && PKG_DEPENDS_TARGET+=" batteryplus"
 
-# Entware support
 mkdir -p ${INSTALL}
 ln -sf /storage/.opt ${INSTALL}/opt
-PKG_DEPENDS_TARGET+=" entware"
 
 true
