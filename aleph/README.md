@@ -8,8 +8,11 @@ replaces the front end with a small shell built around your music.
 
 ## What you get
 
-- **Music** from `/storage/music`: Playlists, Artists, Albums, Songs, Genres and Up Next.
-  Playback carries on in the background, whatever else is open.
+- **Music** from `/storage/music`: Playlists, Artists, Albums, Songs, Genres, Up Next and
+  Search. Playback carries on in the background, whatever else is open, and a sleep timer
+  in Now Playing stops it for you.
+- **Search** with an on-screen keyboard that types Hangul as well as Latin; bare initials
+  such as ㅎㄱ find 한강.
 - **Radio**: stations from [Radio Browser](https://www.radio-browser.info), with
   Favorites, Top Stations, Korea, By Country and Search.
 - **Videos** from `/storage/videos`, played by mpv. It remembers where you stopped.

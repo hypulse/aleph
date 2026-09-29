@@ -20,11 +20,14 @@ class Battery:
     """Percent from batteryplus when present (the PMIC gauge is uncalibrated on mainline)."""
 
     INTERVAL = 30
+    WARN_AT = (20, 10, 5)
 
-    def __init__(self, state, sim=False, root="/sys/class/power_supply"):
+    def __init__(self, state, notify=None, sim=False, root="/sys/class/power_supply"):
         self.state = state
+        self.notify = notify or (lambda percent: None)
         self.sim = sim
         self.root = root
+        self._warned = 101
 
     async def start(self):
         if self.sim:
@@ -62,4 +65,16 @@ class Battery:
             value = max(0, min(100, int(float(percent))))
         except ValueError:
             value = 0
-        self.state.update("battery", percent=value, charging=status in ("Charging", "Full"))
+        charging = status in ("Charging", "Full")
+        self.state.update("battery", percent=value, charging=charging)
+        self._warn(value, charging)
+
+    def _warn(self, percent, charging):
+        """Say so once as the charge crosses each warning level on the way down."""
+        if charging or percent > self._warned + 3:
+            self._warned = 101
+            return
+        level = min((w for w in self.WARN_AT if percent <= w), default=None)
+        if level is not None and level < self._warned:
+            self._warned = level
+            self.notify(percent)

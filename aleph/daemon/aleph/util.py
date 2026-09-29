@@ -69,6 +69,13 @@ def sort_key(text):
     return _ARTICLE.sub("", text).casefold()
 
 
+CHOSEONG = "ㄱㄲㄴㄷㄸㄹㅁㅂㅃㅅㅆㅇㅈㅉㅊㅋㅌㅍㅎ"
+
+
+def _initial(ch):
+    return CHOSEONG[(ord(ch) - 0xAC00) // 588] if "가" <= ch <= "힣" else ch
+
+
 def index_letter(text):
     key = sort_key(text)
     if not key:
@@ -77,10 +84,18 @@ def index_letter(text):
     if "a" <= ch <= "z":
         return ch.upper()
     if "가" <= ch <= "힣":
-        # initial consonant of a Hangul syllable
-        initials = "ㄱㄲㄴㄷㄸㄹㅁㅂㅃㅅㅆㅇㅈㅉㅊㅋㅌㅍㅎ"
-        return initials[(ord(ch) - 0xAC00) // 588]
+        return _initial(ch)
     return "#"
+
+
+def matches(query, text):
+    """Substring match; a query of bare Hangul initials (ㅎㄱ) matches their syllables (한강)."""
+    q = unicodedata.normalize("NFC", query).casefold().strip()
+    t = unicodedata.normalize("NFC", text or "").casefold()
+    if q in t:
+        return True
+    bare = q.replace(" ", "")
+    return bool(bare) and all(c in CHOSEONG for c in bare) and bare in "".join(map(_initial, t.replace(" ", "")))
 
 
 def enc(*parts):

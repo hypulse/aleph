@@ -477,26 +477,53 @@ static const char *kb_rows[2][2][4] = {
     {{"1234567890", "-/:;()$&@\"", ".,?!'_", ""}, {"[]{}#%^*+=", "\\|~<>`", ".,?!'_", ""}},
 };
 
+/* Dubeolsik, in the same shape as the QWERTY rows. */
+static const int kb_jamo_rows[2][3][10] = {
+    {{0x3142, 0x3148, 0x3137, 0x3131, 0x3145, 0x315B, 0x3155, 0x3151, 0x3150, 0x3154},
+     {0x3141, 0x3134, 0x3147, 0x3139, 0x314E, 0x3157, 0x3153, 0x314F, 0x3163},
+     {0x314B, 0x314C, 0x314A, 0x314D, 0x3160, 0x315C, 0x3161}},
+    {{0x3143, 0x3149, 0x3138, 0x3132, 0x3146, 0x315B, 0x3155, 0x3151, 0x3152, 0x3156},
+     {0x3141, 0x3134, 0x3147, 0x3139, 0x314E, 0x3157, 0x3153, 0x314F, 0x3163},
+     {0x314B, 0x314C, 0x314A, 0x314D, 0x3160, 0x315C, 0x3161}},
+};
+
 int kb_row_len(int row)
 {
     Keyboard *k = &app.keyboard;
     if (row == 3)
-        return 3;
+        return 4;
     int n = (int)strlen(kb_rows[k->symbols][k->shift][row]);
     return row == 2 ? n + 2 : n;
+}
+
+/* The jamo under a letter key in Hangul mode, or 0. */
+int kb_jamo(int row, int col)
+{
+    Keyboard *k = &app.keyboard;
+    if (!k->hangul || k->symbols || row > 2)
+        return 0;
+    if (row == 2 && (col == 0 || col == kb_row_len(2) - 1))
+        return 0;
+    return kb_jamo_rows[k->shift][row][row == 2 ? col - 1 : col];
 }
 
 const char *kb_label(int row, int col, char *buf)
 {
     Keyboard *k = &app.keyboard;
     if (row == 3) {
-        const char *labels[3] = {k->symbols ? "ABC" : "123", S("space", "space"), S("done", "Done")};
+        const char *labels[4] = {k->symbols ? (k->hangul ? "가" : "ABC") : "123", k->hangul ? "A" : "한",
+                                 S("space", "space"), S("done", "Done")};
         return labels[col];
     }
     if (row == 2 && col == 0)
         return k->symbols ? (k->shift ? "123" : "#+=") : "⇧";
     if (row == 2 && col == kb_row_len(2) - 1)
         return "⌫";
+    int jamo = kb_jamo(row, col);
+    if (jamo) {
+        hangul_utf8(jamo, buf);
+        return buf;
+    }
     const char *s = kb_rows[k->symbols][k->shift][row];
     int idx = row == 2 ? col - 1 : col;
     buf[0] = s[idx];
@@ -545,7 +572,7 @@ static void draw_keyboard(void)
         int widths[12], total = 0;
         for (int c = 0; c < n; c++) {
             if (row == 3)
-                widths[c] = c == 1 ? 330 : 128;
+                widths[c] = c == 2 ? 290 : c == 1 ? 90 : 110;
             else if (row == 2 && (c == 0 || c == n - 1))
                 widths[c] = 84;
             else
@@ -554,7 +581,7 @@ static void draw_keyboard(void)
         }
         int kx = (SCREEN_W - total) / 2;
         for (int c = 0; c < n; c++) {
-            bool special = row == 3 ? c != 1 : (row == 2 && (c == 0 || c == n - 1));
+            bool special = row == 3 ? c != 2 : (row == 2 && (c == 0 || c == n - 1));
             bool sel = k->row == row && k->col == c;
             fill_round(kx, ky + 2, widths[c], kh, 9, RGBA(0, 0, 0, 45));
             if (sel)

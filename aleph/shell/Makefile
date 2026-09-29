@@ -4,7 +4,7 @@ CFLAGS += -std=gnu11 -Wall -Wextra -Wno-unused-parameter -Isrc -Ithird_party/cjs
 CFLAGS += $(shell $(PKG_CONFIG) --cflags sdl2 SDL2_ttf SDL2_image)
 LDLIBS += $(shell $(PKG_CONFIG) --libs sdl2 SDL2_ttf SDL2_image) -lm
 
-SRC = src/main.c src/ipc.c src/gfx.c src/views.c src/nav.c src/util.c third_party/cjson/cJSON.c
+SRC = src/main.c src/ipc.c src/gfx.c src/views.c src/nav.c src/hangul.c src/util.c third_party/cjson/cJSON.c
 HDR = src/shell.h src/theme.h
 
 PREFIX ?= /usr

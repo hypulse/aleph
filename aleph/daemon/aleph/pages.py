@@ -198,6 +198,8 @@ class Pages:
             return m.genre_songs(rest[1])
         if kind == "playlist" and len(rest) >= 2:
             return await m.playlist_songs(rest[1])
+        if kind == "search" and len(rest) >= 2:
+            return m.search(rest[1])[2]
         return None
 
     async def _page_music(self, path, rest):
@@ -207,9 +209,25 @@ class Pages:
         if not rest:
             items = [item("playlists", t("playlists")), item("artists", t("artists")),
                      item("albums", t("albums")), item("songs", t("songs")),
-                     item("genres", t("genres")), item("queue", t("up_next"))]
+                     item("genres", t("genres")), item("queue", t("up_next")),
+                     item("search", t("search"))]
             return page(path, t("music"), items)
         kind = rest[0]
+        if kind == "search" and len(rest) >= 2:
+            artists, albums, songs = m.search(rest[1])
+            items = []
+            if artists:
+                items.append(header(t("artists")))
+                items += [item("a:" + a, a) for a in artists]
+            if albums:
+                items.append(header(t("albums")))
+                items += [item(f"alb{i}", album, value=artist or None)
+                          for i, ((artist, album), _) in enumerate(albums)]
+            if songs:
+                items.append(header(t("songs")))
+                items += [item(f"s{i}", s["title"], "playing" if s["file"] == playing else "none",
+                               value=s["artist"] or None) for i, s in enumerate(songs)]
+            return page(path, rest[1], items, live=True, empty=empty("search", t("no_results")))
         if kind == "artists":
             names = m.artists()
             items = [item("a:" + n, n or t("unknown_artist")) for n in names]
@@ -255,8 +273,16 @@ class Pages:
     async def _do_music(self, path, rest, key):
         m = self.app.music
         if not rest:
+            if key == "search":
+                return {"input": {"title": self.t("search"), "placeholder": self.t("search_music_prompt"),
+                                  "token": self._token(self._music_search)}}
             return {"push": f"/music/{key}"}
         kind = rest[0]
+        if kind == "search" and key.startswith("a:"):
+            return {"push": "/music/artist/" + enc(key[2:])}
+        if kind == "search" and key.startswith("alb") and len(rest) >= 2:
+            (artist, album), _ = m.search(rest[1])[1][int(key[3:])]
+            return {"push": "/music/album/" + enc(artist, album)}
         if kind == "artists":
             return {"push": "/music/artist/" + enc(key[2:])}
         if kind == "artist" and len(rest) == 2:
@@ -327,12 +353,15 @@ class Pages:
     async def now_playing_options(self):
         t = self.t
         player = self.app.state.get("player")
+        left = self.app.power.sleep_timer_left()
+        timer = {"key": "timer", "title": t("sleep_timer"),
+                 "value": t("minutes", n=left) if left else t("off")}
         if player["kind"] == "radio":
             station = self.app.music.station
             if not station:
                 return {"none": True}
             fav = self.app.radio.is_favorite(station["uuid"])
-            options = [{"key": "fav", "title": t("remove_favorite") if fav else t("add_favorite")}]
+            options = [{"key": "fav", "title": t("remove_favorite") if fav else t("add_favorite")}, timer]
         else:
             repeat = t("repeat_one") if player["single"] else t("repeat") if player["repeat"] else t("off")
             options = [
@@ -342,6 +371,7 @@ class Pages:
             ]
             if player["album"]:
                 options.append({"key": "album", "title": t("go_to_album")})
+            options.append(timer)
 
         async def choose(choice):
             m = self.app.music
@@ -354,12 +384,28 @@ class Pages:
                 await m.cycle_repeat()
             elif choice == "queue":
                 return {"push": "/music/queue"}
+            elif choice == "timer":
+                return self._sleep_timer_sheet()
             elif choice == "album":
                 song = next((s for s in m.songs if s["file"] == player.get("file")), None)
                 if song:
                     return {"push": "/music/album/" + enc(song["albumartist"], song["album"])}
             return {"none": True}
         return {"sheet": {"title": player["title"], "items": options, "token": self._token(choose)}}
+
+    def _sleep_timer_sheet(self):
+        t = self.t
+        choices = [(15, t("minutes", n=15)), (30, t("minutes", n=30)), (45, t("minutes", n=45)),
+                   (60, t("one_hour")), (0, t("off"))]
+
+        def choose(choice):
+            minutes = int(choice)
+            self.app.power.set_sleep_timer(minutes)
+            if minutes:
+                self.app.toast(t("sleep_timer_set", n=minutes), "moon")
+            return {"none": True}
+        return {"sheet": {"title": t("sleep_timer"), "token": self._token(choose),
+                          "items": [{"key": str(m), "title": label} for m, label in choices]}}
 
     # radio -------------------------------------------------------------------
 
@@ -440,6 +486,10 @@ class Pages:
             await self.app.music.play_stream(station)
             self.app.radio.report_click(station)
             return {"nowplaying": True}
+
+    def _music_search(self, text):
+        text = (text or "").strip()
+        return {"push": "/music/search/" + enc(text)} if text else {"none": True}
 
     def _radio_search(self, text):
         text = (text or "").strip()

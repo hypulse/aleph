@@ -1,0 +1,32 @@
+# Music search, the sleep timer in Now Playing options.
+wait 800
+key confirm
+hold down 7
+key confirm
+wait 300
+shot 50-search-keyboard.png
+type or
+wait 200
+shot 51-search-typed.png
+key play
+wait 400
+shot 52-search-results.png
+hold down 3
+key confirm
+wait 600
+key more
+wait 300
+hold down 4
+key confirm
+wait 400
+shot 53-sleep-timer.png
+key down
+key confirm
+wait 300
+shot 54-sleep-timer-set.png
+wait 2600
+key more
+wait 300
+shot 55-options-with-timer.png
+key back
+key home

@@ -46,7 +46,7 @@ class App:
         self.wifi = Wifi(FakeWifi() if self.sim else Nmcli(), self.state, self.t, self)
         self.audio = Audio(FakeAudio() if self.sim else Pactl(), self.state, self.settings)
         self.power = Power(self.state, self.settings, self, sim=self.sim)
-        self.battery = Battery(self.state, sim=self.sim)
+        self.battery = Battery(self.state, notify=self._battery_low, sim=self.sim)
         self.apps = Apps(self.state, self, {k: v for k, v in os.environ.items() if k in APP_ENV_KEYS},
                          sim=self.sim)
         self.catalog = catalog(args.data, lambda: self.t.lang, sim=self.sim)
@@ -85,6 +85,9 @@ class App:
 
     def toast(self, text, icon=None):
         self.server.broadcast({"event": "toast", "text": text, "icon": icon})
+
+    def _battery_low(self, percent):
+        self.toast(self.t("battery_low", n=percent), "battery")
 
     def page_changed(self, *paths):
         self._page_paths.update(paths)

@@ -59,6 +59,11 @@ STRINGS = {
     "added_favorite": ("즐겨찾기에 추가됨", "Added to Favorites"),
     "removed_favorite": ("즐겨찾기에서 삭제됨", "Removed from Favorites"),
     "stream_failed": ("방송에 연결할 수 없어요", "Couldn’t Connect to the Station"),
+    "search_music_prompt": ("아티스트, 앨범, 노래", "Artists, albums, songs"),
+    "sleep_timer": ("잠자기 타이머", "Sleep Timer"),
+    "sleep_timer_set": ("{n}분 뒤에 음악을 멈춰요", "Music stops in {n} min"),
+    "one_hour": ("1시간", "1 hour"),
+    "battery_low": ("배터리 {n}% 남음", "{n}% Battery Remaining"),
     "n_stations": ("방송 {n}개", "{n} stations"),
 
     "no_videos_title": ("비디오가 없어요", "No Videos"),

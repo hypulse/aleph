@@ -79,6 +79,8 @@ class Power:
         self._power_down_at = None
         self._long_press = None
         self._poke = asyncio.Event()
+        self._sleep_timer = None
+        self.sleep_timer_at = None
 
     async def start(self):
         if not self.sim:
@@ -185,6 +187,28 @@ class Power:
                 await self.set_screen(False)
             elif sleep is not None and now >= sleep:
                 await self.sleep()
+
+    def set_sleep_timer(self, minutes):
+        """Stop the music after `minutes`; if nobody is looking, sleep too. 0 cancels."""
+        if self._sleep_timer:
+            self._sleep_timer.cancel()
+        self._sleep_timer = self.sleep_timer_at = None
+        if minutes:
+            self.sleep_timer_at = time.monotonic() + minutes * 60
+            self._sleep_timer = asyncio.get_running_loop().call_later(
+                minutes * 60, lambda: spawn(self._sleep_timer_done()))
+
+    def sleep_timer_left(self):
+        """Whole minutes left on the sleep timer, or None."""
+        if self.sleep_timer_at is None:
+            return None
+        return max(1, round((self.sleep_timer_at - time.monotonic()) / 60))
+
+    async def _sleep_timer_done(self):
+        self._sleep_timer = self.sleep_timer_at = None
+        self.events.before_sleep()
+        if not self.screen_on:
+            await self.sleep()
 
     async def sleep(self):
         self.events.before_sleep()

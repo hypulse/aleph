@@ -1,0 +1,30 @@
+# The Hangul keyboard: composition, splitting a final consonant, backspace, then a music search.
+wait 800
+key confirm
+hold down 7
+key confirm
+wait 300
+key down
+key down
+key down
+key right
+key confirm
+wait 200
+shot 60-hangul-keyboard.png
+type ㅎㅏㄴㄱㅏㅇㅇㅢ ㅂㅏㅁ
+wait 200
+shot 61-hangul-typed.png
+key back
+key back
+wait 200
+shot 62-hangul-backspace.png
+key back
+key back
+key back
+key back
+wait 200
+shot 63-hangul-short.png
+key play
+wait 500
+shot 64-hangul-search.png
+key home

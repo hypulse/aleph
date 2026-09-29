@@ -442,6 +442,8 @@ static void open_confirm(cJSON *c)
     d->active = true;
 }
 
+static bool kb_last_hangul;
+
 static void open_keyboard(cJSON *in)
 {
     Keyboard *k = &app.keyboard;
@@ -452,7 +454,10 @@ static void open_keyboard(cJSON *in)
     k->placeholder = json_str(in, "placeholder");
     k->token = json_str(in, "token");
     k->secret = json_bool(in, "secret");
-    k->text[0] = 0;
+    k->base[0] = 0;
+    k->cho = k->jung = k->jong = 0;
+    kb_sync(k);
+    k->hangul = !k->secret && kb_last_hangul;
     k->shift = k->symbols = false;
     k->row = k->col = 0;
     k->at = SDL_GetTicks();
@@ -663,14 +668,11 @@ static void confirm_key(const char *key)
     }
 }
 
-static void kb_delete(Keyboard *k)
+static void kb_submit(Keyboard *k)
 {
-    int n = (int)strlen(k->text);
-    while (n > 0 && ((unsigned char)k->text[n - 1] & 0xC0) == 0x80)
-        n--;
-    if (n > 0)
-        n--;
-    k->text[n] = 0;
+    hangul_commit(k);
+    k->active = false;
+    resolve(k->token, k->text);
 }
 
 static void keyboard_key(const char *key)
@@ -686,35 +688,40 @@ static void keyboard_key(const char *key)
         k->col++;
     else if (!strcmp(key, "back")) {
         if (k->text[0])
-            kb_delete(k);
+            kb_backspace(k);
         else
             k->active = false;
     } else if (!strcmp(key, "more")) {
         k->shift = !k->shift;
     } else if (!strcmp(key, "now")) {
+        hangul_commit(k);
         k->symbols = !k->symbols;
         k->shift = false;
     } else if (!strcmp(key, "play")) {
-        k->active = false;
-        resolve(k->token, k->text);
+        kb_submit(k);
     } else if (!strcmp(key, "confirm")) {
         char buf[8];
         const char *label = kb_label(k->row, k->col, buf);
-        int last = kb_row_len(k->row) - 1;
+        int last = kb_row_len(k->row) - 1, jamo = kb_jamo(k->row, k->col);
         if (k->row == 3 && k->col == 0) {
+            hangul_commit(k);
             k->symbols = !k->symbols;
             k->shift = false;
-        } else if (k->row == 3 && k->col == 2) {
-            k->active = false;
-            resolve(k->token, k->text);
+        } else if (k->row == 3 && k->col == 1) {
+            hangul_commit(k);
+            k->hangul = kb_last_hangul = !k->hangul;
+            k->symbols = k->shift = false;
+        } else if (k->row == 3 && k->col == 3) {
+            kb_submit(k);
         } else if (k->row == 2 && k->col == 0) {
             k->shift = !k->shift;
         } else if (k->row == 2 && k->col == last) {
-            kb_delete(k);
+            kb_backspace(k);
         } else {
-            const char *add = k->row == 3 ? " " : label;
-            if (strlen(k->text) + strlen(add) < sizeof(k->text) - 1)
-                strcat(k->text, add);
+            if (jamo)
+                hangul_input(k, jamo);
+            else
+                kb_append(k, k->row == 3 ? " " : label);
             if (k->shift && !k->symbols)
                 k->shift = false;
         }

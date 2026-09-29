@@ -6,7 +6,7 @@ import random
 import time
 
 from .mpd import MPD, MPDError, records, values
-from .util import sort_key, spawn
+from .util import matches, sort_key, spawn
 
 log = logging.getLogger("aleph.music")
 
@@ -176,6 +176,15 @@ class Music:
     def artists(self):
         names = {s["albumartist"] for s in self.songs}
         return sorted(names, key=sort_key)
+
+    def search(self, query, limit=50):
+        """Artists, albums and songs whose names contain the query."""
+        if not query.strip():
+            return [], [], []
+        artists = [a for a in self.artists() if matches(query, a)]
+        albums = [(key, f) for key, f in self.albums() if matches(query, key[1])]
+        songs = [s for s in self.all_songs() if matches(query, s["title"])]
+        return artists[:limit], albums[:limit], songs[:limit]
 
     def albums(self, artist=None, genre=None):
         found = {}

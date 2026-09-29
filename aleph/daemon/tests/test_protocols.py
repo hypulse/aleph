@@ -8,10 +8,11 @@ import unittest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from aleph.audio import _sink  # noqa: E402
+from aleph.battery import Battery  # noqa: E402
 from aleph.mpd import MPD, filter_expr, quote, records, values  # noqa: E402
 from aleph.pages import BOOK_EXTS, folder_listing  # noqa: E402
 from aleph.radio import Radio, station_from_api  # noqa: E402
-from aleph.util import enc, fmt_duration, index_letter, sort_key, split_path  # noqa: E402
+from aleph.util import enc, fmt_duration, index_letter, matches, sort_key, split_path  # noqa: E402
 from aleph.wifi import parse_terse  # noqa: E402
 
 
@@ -25,6 +26,13 @@ class UtilTest(unittest.TestCase):
         self.assertEqual(index_letter("가을"), "ㄱ")
         self.assertEqual(index_letter("하늘"), "ㅎ")
         self.assertEqual(index_letter("99 Luftballons"), "#")
+
+    def test_search_matches_initials(self):
+        self.assertTrue(matches("han", "한강의 밤 (Han River)"))
+        self.assertTrue(matches("ㅎㄱ", "한강의 밤"))
+        self.assertTrue(matches("ㅎㄱㅇ ㅂ", "한강의 밤"))
+        self.assertFalse(matches("ㅎㅂ", "한강의 밤"))
+        self.assertFalse(matches("ㅎ가", "한강"))
 
     def test_path_roundtrip(self):
         path = "/music/album/" + enc("AC/DC", "Back in Black")
@@ -114,6 +122,18 @@ class FolderListingTest(unittest.TestCase):
         dirs, files = folder_listing(d, BOOK_EXTS)
         self.assertEqual(dirs, ["Classics"])
         self.assertEqual(files, ["Arc.fb2.zip", "The Road.epub", "데미안.epub"])
+
+
+class BatteryWarningTest(unittest.TestCase):
+    def test_warns_once_per_level_and_resets_on_charge(self):
+        said = []
+        b = Battery(None, notify=said.append)
+        for percent in (40, 21, 20, 19, 12, 10, 9, 30, 8, 4):
+            b._warn(percent, charging=False)
+        self.assertEqual(said, [20, 10, 8, 4])
+        b._warn(50, charging=True)
+        b._warn(19, charging=False)
+        self.assertEqual(said[-1], 19)
 
 
 class WifiParsingTest(unittest.TestCase):

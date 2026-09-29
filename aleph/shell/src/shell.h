@@ -59,8 +59,9 @@ typedef struct {
 typedef struct {
     bool active;
     char *title, *placeholder, *token;
-    bool secret, shift, symbols;
-    char text[256];
+    bool secret, shift, symbols, hangul;
+    char base[256], text[256];
+    int cho, jung, jong;
     int row, col;
     Uint32 at;
 } Keyboard;
@@ -170,6 +171,17 @@ bool animating(void);
 int next_frame_delay(void);
 int kb_row_len(int row);
 const char *kb_label(int row, int col, char *buf);
+int kb_jamo(int row, int col);
+
+/* hangul.c */
+bool hangul_is_jamo(int cp);
+bool hangul_is_vowel(int cp);
+int hangul_utf8(int cp, char out[4]);
+void hangul_input(Keyboard *k, int cp);
+void hangul_commit(Keyboard *k);
+void kb_sync(Keyboard *k);
+void kb_backspace(Keyboard *k);
+void kb_append(Keyboard *k, const char *s);
 int row_height(Page *p, int i);
 int list_height(Page *p);
 int item_y(Page *p, int i);

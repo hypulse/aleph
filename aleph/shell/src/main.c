@@ -155,6 +155,19 @@ static void script_step(void)
     } else if (!strcmp(cmd, "volume")) {
         daemon_volume(atoi(arg));
         settle = false;
+    } else if (!strcmp(cmd, "type")) {
+        /* Jamo go through the composer as if typed on the Hangul layout. */
+        for (const unsigned char *c = (const unsigned char *)arg; *c && app.keyboard.active;) {
+            int len = *c < 0x80 ? 1 : *c < 0xE0 ? 2 : *c < 0xF0 ? 3 : 4;
+            int cp = len == 3 ? (c[0] & 0x0F) << 12 | (c[1] & 0x3F) << 6 | (c[2] & 0x3F) : 0;
+            char one[5] = {0};
+            memcpy(one, c, (size_t)len);
+            if (hangul_is_jamo(cp))
+                hangul_input(&app.keyboard, cp);
+            else
+                kb_append(&app.keyboard, one);
+            c += len;
+        }
     } else if (!strcmp(cmd, "send")) {
         cJSON *req = cJSON_Parse(arg);
         if (req)

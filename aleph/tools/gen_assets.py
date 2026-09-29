@@ -283,7 +283,7 @@ def build(out):
     headphones(d, 4, 4, 1.8, 3.4)
     done(img, 80, 80, P("hud-headphones"))
 
-    for name in ("bluetooth", "wifi", "star", "music"):
+    for name in ("bluetooth", "wifi", "star", "music", "moon", "battery"):
         img, d = canvas(22, 22)
         if name == "bluetooth":
             line(d, [(5.5, 7), (15.5, 15.5), (11, 20), (11, 2), (15.5, 6.5), (5.5, 15)], 2)
@@ -293,6 +293,13 @@ def build(out):
                 arc(d, 11, 18, r, 225, 315, 2.2)
         elif name == "star":
             star(d, 11, 11.5, 10, 4.2)
+        elif name == "moon":
+            ellipse(d, 2, 2, 20, 20)
+            d.ellipse([s(7.5), s(-1.5), s(24), s(15)], fill=CLEAR)
+        elif name == "battery":
+            rrect(d, 1, 6, 18, 16, 2.5, fill=False, width=1.8)
+            rrect(d, 19, 9, 21, 13, 0.8)
+            rrect(d, 3.6, 8.6, 7.5, 13.4, 1)
         else:
             note(d, 1, 1, 0.5)
         done(img, 22, 22, os.path.join(icons, f"toast-{name}.png"))
