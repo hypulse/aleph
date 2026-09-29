@@ -32,9 +32,16 @@ async def run(*args, timeout=10.0, env=None, stdin=None):
     return proc.returncode, out.decode(errors="replace"), err.decode(errors="replace")
 
 
+_tasks = set()
+
+
 def spawn(coro):
-    """Start a background task and log (instead of swallowing) its exceptions."""
+    """Start a background task and log (instead of swallowing) its exceptions. The loop
+    holds tasks only weakly, so a reference stays here until the task is done; without
+    it a task parked on a socket can be collected mid-flight."""
     task = asyncio.ensure_future(coro)
+    _tasks.add(task)
+    task.add_done_callback(_tasks.discard)
     task.add_done_callback(_log_task_error)
     return task
 

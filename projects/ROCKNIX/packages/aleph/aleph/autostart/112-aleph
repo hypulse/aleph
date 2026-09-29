@@ -13,6 +13,12 @@ fi
 mkdir -p /storage/.config/profile.d
 echo 'UI_SERVICE="sway.service aleph-shell.service"' >/storage/.config/profile.d/099-aleph
 
+# Only EmulationStation ever chose a time zone; aleph speaks Korean first, so start in Seoul.
+if [ ! -f /storage/.cache/timezone ]; then
+  echo "TIMEZONE=Asia/Seoul" >/storage/.cache/timezone
+  ln -sf /usr/share/zoneinfo/Asia/Seoul /var/run/localtime
+fi
+
 # 1 GB fills up once apps wait in the background: compress idle pages instead of
 # losing apps, and skip KSM, which wakes the CPU twice a second for nothing here.
 if [ ! -f /storage/.config/swap.conf ]; then

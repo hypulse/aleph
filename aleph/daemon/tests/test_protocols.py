@@ -17,7 +17,7 @@ from aleph.power import Power  # noqa: E402
 from aleph.state import State  # noqa: E402
 from aleph.radio import Radio, station_from_api  # noqa: E402
 from aleph.transfer import Transfer, safe_parts  # noqa: E402
-from aleph.util import enc, fmt_duration, index_letter, matches, sort_key, split_path  # noqa: E402
+from aleph.util import enc, fmt_duration, index_letter, matches, sort_key, spawn, split_path  # noqa: E402
 from aleph.wifi import parse_terse  # noqa: E402
 
 
@@ -115,6 +115,20 @@ class MpdClientTest(unittest.IsolatedAsyncioTestCase):
         data, mime = await mpd.picture("x.flac")
         self.assertEqual(data, self.fake.picture)
         self.assertEqual(mime, "image/png")
+
+
+class SpawnTest(unittest.IsolatedAsyncioTestCase):
+    async def test_background_task_survives_garbage_collection(self):
+        import gc
+
+        async def parked():
+            await asyncio.get_running_loop().create_future()
+        task = spawn(parked())
+        await asyncio.sleep(0)
+        gc.collect()
+        await asyncio.sleep(0)
+        self.assertFalse(task.done())
+        task.cancel()
 
 
 class FolderListingTest(unittest.TestCase):

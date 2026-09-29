@@ -3,6 +3,8 @@ import json
 import logging
 import os
 
+from .util import spawn
+
 log = logging.getLogger("aleph.ipc")
 
 
@@ -51,7 +53,7 @@ class Server:
                     request = json.loads(line)
                 except ValueError:
                     continue
-                asyncio.ensure_future(self._dispatch(client, request))
+                spawn(self._dispatch(client, request))
         except (ConnectionError, asyncio.IncompleteReadError):
             pass
         finally:

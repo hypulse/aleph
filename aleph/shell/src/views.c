@@ -303,11 +303,11 @@ static void draw_nowplaying(int x)
         draw_text(FONT_REGULAR, FONT_SMALL, counter, x + 36, CONTENT_Y + 12, C_TEXT2, 0);
     }
     int ix = x + SCREEN_W - 36;
-    if (pl->repeat) {
+    if (pl->repeat && !radio) {
         draw_icon(pl->single ? "repeat-one" : "repeat", ix - 24, CONTENT_Y + 14, C_ACCENT);
         ix -= 34;
     }
-    if (pl->shuffle)
+    if (pl->shuffle && !radio)
         draw_icon("shuffle", ix - 24, CONTENT_Y + 14, C_ACCENT);
 
     const int art = 250, ax = x + 36, ay = CONTENT_Y + 50;

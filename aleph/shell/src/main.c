@@ -16,11 +16,73 @@ typedef struct {
 
 static Script script;
 
+/* --record: frames go to a command's stdin as raw RGB at a steady rate, with the
+ * script's captions drawn in a strip under the screen. For demos, not for the device. */
+#define REC_FPS 30
+#define REC_STRIP 64
+
+typedef struct {
+    FILE *pipe;
+    SDL_Surface *frame, *caption;
+    Uint32 started;
+    long frames;
+} Recorder;
+
+static Recorder rec;
+
+static bool record_start(const char *cmd)
+{
+    rec.pipe = popen(cmd, "w");
+    rec.frame = SDL_CreateRGBSurfaceWithFormat(0, SCREEN_W, SCREEN_H + REC_STRIP, 24, SDL_PIXELFORMAT_RGB24);
+    rec.started = SDL_GetTicks();
+    return rec.pipe && rec.frame && rec.frame->pitch == SCREEN_W * 3;
+}
+
+static void record_caption(const char *text)
+{
+    SDL_FreeSurface(rec.caption);
+    rec.caption = NULL;
+    TTF_Font *f = font(FONT_MEDIUM, 23);
+    if (f && text && *text)
+        rec.caption = TTF_RenderUTF8_Blended_Wrapped(f, text, (SDL_Color){242, 242, 247, 255}, SCREEN_W - 40);
+}
+
+static void record_frame(void)
+{
+    if (!rec.pipe)
+        return;
+    long due = (long)((SDL_GetTicks() - rec.started) * (Uint64)REC_FPS / 1000) + 1;
+    if (rec.frames >= due)
+        return;
+    SDL_RenderReadPixels(app.renderer, NULL, SDL_PIXELFORMAT_RGB24, rec.frame->pixels, rec.frame->pitch);
+    SDL_Rect strip = {0, SCREEN_H, SCREEN_W, REC_STRIP};
+    SDL_FillRect(rec.frame, &strip, SDL_MapRGB(rec.frame->format, 28, 28, 30));
+    if (rec.caption) {
+        SDL_Rect at = {(SCREEN_W - rec.caption->w) / 2, SCREEN_H + (REC_STRIP - rec.caption->h) / 2, 0, 0};
+        SDL_BlitSurface(rec.caption, NULL, rec.frame, &at);
+    }
+    size_t size = (size_t)rec.frame->pitch * (size_t)rec.frame->h;
+    for (; rec.frames < due; rec.frames++)
+        if (fwrite(rec.frame->pixels, 1, size, rec.pipe) != size) {
+            pclose(rec.pipe);
+            rec.pipe = NULL;
+            return;
+        }
+}
+
 static void daemon_key(const char *key)
 {
     cJSON *req = cJSON_CreateObject();
     cJSON_AddStringToObject(req, "op", "key");
     cJSON_AddStringToObject(req, "key", key);
+    ipc_request(req, NULL, NULL);
+}
+
+/* Input that reaches the shell without passing through alephd still counts as use. */
+static void daemon_activity(void)
+{
+    cJSON *req = cJSON_CreateObject();
+    cJSON_AddStringToObject(req, "op", "activity");
     ipc_request(req, NULL, NULL);
 }
 
@@ -36,6 +98,7 @@ static void daemon_volume(int delta)
 static void keyboard(SDL_KeyboardEvent *e)
 {
     bool rep = e->repeat != 0;
+    daemon_activity();
     switch (e->keysym.sym) {
     case SDLK_UP: nav_key("up", rep); break;
     case SDLK_DOWN: nav_key("down", rep); break;
@@ -140,6 +203,8 @@ static void script_step(void)
     sscanf(line, "%31s %959[^\n]", cmd, arg);
     bool settle = true;
     script.input_at = now;
+    if (!strcmp(cmd, "key") || !strcmp(cmd, "hold") || !strcmp(cmd, "type"))
+        daemon_activity();
     if (!strcmp(cmd, "key")) {
         nav_key(arg, false);
     } else if (!strcmp(cmd, "hold")) {
@@ -176,6 +241,16 @@ static void script_step(void)
     } else if (!strcmp(cmd, "wait")) {
         script.wait_until = now + (Uint32)atoi(arg);
         settle = false;
+    } else if (!strcmp(cmd, "caption")) {
+        record_caption(arg);
+        settle = false;
+    } else if (!strcmp(cmd, "sim")) {
+        cJSON *req = cJSON_Parse(arg);
+        if (req) {
+            cJSON_AddStringToObject(req, "op", "sim");
+            ipc_request(req, NULL, NULL);
+        }
+        settle = false;
     } else if (!strcmp(cmd, "shot")) {
         render();
         if (!save_screenshot(arg))
@@ -193,12 +268,13 @@ static void script_step(void)
 static void usage(void)
 {
     fprintf(stderr, "usage: aleph-shell [--socket PATH] [--data DIR] [--window] [--scale N] "
-                    "[--software] [--script FILE]\n");
+                    "[--software] [--script FILE] [--record COMMAND]\n");
 }
 
 int main(int argc, char **argv)
 {
     const char *sock = "/run/aleph/alephd.sock", *data = "/usr/share/aleph", *script_file = NULL;
+    const char *record = NULL;
     bool windowed = false, software = false;
     int scale = 1;
     for (int i = 1; i < argc; i++) {
@@ -208,6 +284,8 @@ int main(int argc, char **argv)
             data = argv[++i];
         else if (!strcmp(argv[i], "--script") && i + 1 < argc)
             script_file = argv[++i];
+        else if (!strcmp(argv[i], "--record") && i + 1 < argc)
+            record = argv[++i];
         else if (!strcmp(argv[i], "--scale") && i + 1 < argc)
             scale = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--window"))
@@ -250,6 +328,11 @@ int main(int argc, char **argv)
         return 1;
     }
 
+    if (record && !record_start(record)) {
+        SDL_Log("cannot record through: %s", record);
+        return 1;
+    }
+
     app.running = true;
     app.focused = true;
     app.status.screen_on = true;
@@ -269,8 +352,11 @@ int main(int argc, char **argv)
         if (script.lines)
             script_step();
         render();
+        record_frame();
         app.dirty = false;
     }
+    if (rec.pipe)
+        pclose(rec.pipe);
     TTF_Quit();
     SDL_Quit();
     return 0;

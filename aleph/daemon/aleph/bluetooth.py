@@ -296,7 +296,7 @@ class Bluetooth:
 
     def my_devices(self):
         devs = [d for d in self.backend.devices.values() if d.paired]
-        return sorted(devs, key=lambda d: (not d.connected, d.name.casefold()))
+        return sorted(devs, key=lambda d: (not d.connected, not d.is_audio, d.name.casefold()))
 
     def other_devices(self):
         devs = [d for d in self.backend.devices.values()

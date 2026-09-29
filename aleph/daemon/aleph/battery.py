@@ -3,6 +3,8 @@ import glob
 import logging
 import os
 
+from .util import spawn
+
 log = logging.getLogger("aleph.battery")
 
 SMOOTHED = "/tmp/battery.percent"
@@ -42,7 +44,7 @@ class Battery:
             asyncio.get_running_loop().add_reader(monitor.fileno(), self._uevent, monitor)
         except ImportError:
             pass
-        asyncio.ensure_future(self._poll())
+        spawn(self._poll())
 
     def _uevent(self, monitor):
         while monitor.poll(timeout=0) is not None:
@@ -68,6 +70,10 @@ class Battery:
         charging = status in ("Charging", "Full")
         self.state.update("battery", percent=value, charging=charging)
         self._warn(value, charging)
+
+    def simulate(self, percent):
+        self.state.update("battery", percent=percent, charging=False)
+        self._warn(percent, False)
 
     def _warn(self, percent, charging):
         """Say so once as the charge crosses each warning level on the way down."""

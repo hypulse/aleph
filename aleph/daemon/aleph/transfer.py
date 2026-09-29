@@ -9,6 +9,7 @@ import shutil
 from urllib.parse import unquote, urlsplit
 
 from .system import _local_ip
+from .util import spawn
 
 log = logging.getLogger("aleph.transfer")
 
@@ -164,7 +165,7 @@ class Transfer:
             if self._rescan:
                 self._rescan.cancel()
             self._rescan = asyncio.get_running_loop().call_later(
-                2, lambda: asyncio.ensure_future(self.app.music.update_library()))
+                2, lambda: spawn(self.app.music.update_library()))
 
     def _page(self):
         t = self.app.t

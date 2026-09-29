@@ -195,10 +195,10 @@ class App:
             return
         self.power.activity()
         if name == "home":
+            # Home is always the home screen: the app in front waits, the shell goes to its root.
             if self.apps.front:
                 await self.apps.home()
-            else:
-                self.server.broadcast({"event": "key", "key": "home"})
+            self.server.broadcast({"event": "key", "key": "home"})
             return
         if self.apps.front:
             return
@@ -249,8 +249,10 @@ class App:
         path = req.get("path", "/")
         if op == "hello":
             if self.ui_ready_at is None:
-                self.ui_ready_at = self.system.uptime()
-                log.info("shell connected %.1f s after the kernel started", self.ui_ready_at or 0)
+                uptime = self.system.uptime()
+                log.info("shell connected %.1f s after the kernel started", uptime or 0)
+                # Only a hello during boot measures boot; a restart of alephd later does not.
+                self.ui_ready_at = uptime if uptime and uptime < 180 else 0
             return {"state": self.state.snapshot(), "strings": self.t.shell_strings(),
                     "lang": self.t.lang, "version": __version__}
         if op == "page":
@@ -285,6 +287,15 @@ class App:
             return {}
         if op == "activity":
             self.power.activity()
+            return {}
+        if op == "sim" and self.sim:
+            # Hardware the simulator lacks: the lid, a held power key, the battery.
+            if "lid" in req:
+                await self.lid(bool(req["lid"]))
+            if "power" in req:
+                await self.power.power_key(bool(req["power"]))
+            if "battery" in req:
+                self.battery.simulate(int(req["battery"]))
             return {}
         raise ValueError(f"unknown op {op}")
 

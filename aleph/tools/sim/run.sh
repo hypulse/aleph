@@ -1,6 +1,6 @@
 #!/bin/sh
 # Run MPD, alephd (simulated hardware) and aleph-shell inside the aleph-dev container.
-# usage: run.sh [script] [screenshot-dir]
+# usage: run.sh [script] [screenshot-dir]; with ALEPH_RECORD=out.mp4 the walk is also recorded.
 set -e
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 WORK=${ALEPH_SIM_DIR:-/tmp/aleph-sim}
@@ -40,7 +40,13 @@ DAEMON=$!
 
 make -s -C "$ROOT/shell"
 cd "$SHOTS"
-if [ -n "$SCRIPT" ]; then
+if [ -n "$SCRIPT" ] && [ -n "$ALEPH_RECORD" ]; then
+    # Record the walk as a video: the screen plus a caption strip, scaled 2x.
+    SDL_VIDEODRIVER=offscreen "$ROOT/shell/aleph-shell" --data "$WORK/share" --socket "$WORK/alephd.sock" \
+        --script "$SCRIPT" --record "ffmpeg -loglevel error -y -f rawvideo -pix_fmt rgb24 -s 640x544 -r 30 \
+        -i - -vf scale=1280:1088:flags=lanczos -c:v libx264 -preset veryfast -crf 18 -pix_fmt yuv420p \
+        -movflags +faststart $ALEPH_RECORD"
+elif [ -n "$SCRIPT" ]; then
     SDL_VIDEODRIVER=offscreen "$ROOT/shell/aleph-shell" --data "$WORK/share" --socket "$WORK/alephd.sock" \
         --script "$SCRIPT"
 fi
