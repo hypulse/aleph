@@ -96,7 +96,15 @@ The recipes that put these in the image are in `projects/ROCKNIX/packages/aleph`
    Pick the `DDR4` image for boards with LPDDR4 memory and the `DDR3` image for the rest.
 2. Write the `.img.gz` to a microSD card with balenaEtcher or Raspberry Pi Imager.
 3. On the card's `ALEPH` partition, copy `device_trees/sun50i-h700-anbernic-rg35xx-sp.dtb`
-   to the root of the partition and rename it `dtb.img`.
+   out of that folder to the top level, next to `KERNEL` and `SYSTEM`, and name the copy
+   `dtb.img`; the original stays where it is. On a Mac, in Terminal:
+
+   ```sh
+   cp /Volumes/ALEPH/device_trees/sun50i-h700-anbernic-rg35xx-sp.dtb /Volumes/ALEPH/dtb.img
+   ```
+
+   Without it the bootloader has nothing to start Linux with, and the device shows only its
+   red light. An SP with the newer panel takes `sun50i-h700-anbernic-rg35xx-sp-v2-panel.dtb`.
 4. Add music, videos and books either way:
    - **Over Wi-Fi**: open Settings > Add Files over Wi-Fi, then open the address it shows
      in a browser on the same network, enter the code and drop files or folders. Each file
