@@ -145,11 +145,14 @@ jobs:
         with:
           skip-components: docker-engine
 
+      # A kept build takes some ten gigabytes all told, which most runners have free as they come.
       - name: Make room
         if: env.KEPT == 'true'
         run: |
-          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
           df -h /
+          if [ "$(df --output=avail -BG / | tail -n 1 | tr -dc 0-9)" -lt 20 ]; then
+            sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
+          fi
 
       - uses: actions/checkout@v6
         with:
