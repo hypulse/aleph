@@ -7,6 +7,7 @@ from .util import spawn
 log = logging.getLogger("aleph.bluetooth")
 
 AUDIO_UUIDS = ("0000110b", "0000111e", "00001108", "0000110d")
+A2DP_SINK = "0000110b-0000-1000-8000-00805f9b34fb"
 
 
 @dataclasses.dataclass
@@ -20,11 +21,23 @@ class Device:
     connected: bool = False
     uuids: tuple = ()
     rssi: int = None
+    transport: bool = False
 
     @property
     def is_audio(self):
         return self.icon.startswith("audio") or any(
             u.lower().startswith(AUDIO_UUIDS) for u in self.uuids)
+
+    @property
+    def named(self):
+        """BlueZ puts the address, dashed, where a name it has not learnt would be."""
+        return bool(self.name) and self.name.replace("-", ":").upper() != self.address.upper()
+
+    @property
+    def ready(self):
+        """Connected as the user means it: headphones count once an A2DP stream has been set
+        up, not while only a link is up, which pairing and a stray LE connection also bring."""
+        return self.connected and (self.transport or not self.is_audio)
 
     @property
     def kind(self):
@@ -38,6 +51,7 @@ class Device:
 class Backend:
     def __init__(self):
         self.devices = {}
+        self.streams = set()
         self.powered = False
         self.discovering = False
         self.address = ""
@@ -78,6 +92,7 @@ class RavelBackend(Backend):
         def removed(path, interfaces, bus=None):
             if "org.bluez.Device1" in interfaces and path in self.devices:
                 old = self.devices.pop(path)
+                self.streams.discard(path)
                 self._emit("removed", None, old)
             if "org.bluez.Adapter1" in interfaces and path == self.adapter_path:
                 self.adapter_path = None
@@ -130,6 +145,23 @@ class RavelBackend(Backend):
                 dev.uuids = tuple(props["UUIDs"])
             if not dev.name:
                 dev.name = dev.address
+            if not dev.connected:
+                self.streams.discard(path)
+            dev.transport = path in self.streams
+            self.devices[path] = dev
+            self._emit("changed", dev, old)
+        if "org.bluez.MediaTransport1" in interfaces:
+            self._streaming(interfaces["org.bluez.MediaTransport1"].get("Device"))
+
+    def _streaming(self, path):
+        """An A2DP stream to this device was set up. That holds for as long as the link does:
+        a stream that is closed to be configured anew is not the headphones going away."""
+        old = self.devices.get(path)
+        if not path or (old and not old.connected):
+            return
+        self.streams.add(path)
+        if old and not old.transport:
+            dev = dataclasses.replace(old, transport=True)
             self.devices[path] = dev
             self._emit("changed", dev, old)
 
@@ -149,9 +181,21 @@ class RavelBackend(Backend):
             return
         adapter = await self._iface(self.adapter_path, "org.bluez.Adapter1")
         try:
-            await (adapter.StartDiscovery() if on else adapter.StopDiscovery())
+            if on:
+                await self._classic_only(adapter)
+                await adapter.StartDiscovery()
+            else:
+                await adapter.StopDiscovery()
         except Exception as e:
             log.info("discovery %s: %s", on, e)
+
+    async def _classic_only(self, adapter):
+        """An LE scan lists every beacon in the building, and it leads BlueZ to reach dual-mode
+        headphones such as AirPods over LE, where they pair and then carry no sound."""
+        try:
+            await adapter.SetDiscoveryFilter({"Transport": ("s", "bredr")})
+        except Exception as e:
+            log.warning("discovery filter: %s", e)
 
     async def pair(self, path):
         dev = await self._iface(path, "org.bluez.Device1")
@@ -166,8 +210,11 @@ class RavelBackend(Backend):
         dev.Trusted = True
         await self._ravel.set_prop_flush(dev)
 
-    async def connect(self, path):
-        await (await self._iface(path, "org.bluez.Device1")).Connect()
+    async def connect(self, path, profile=None):
+        dev = await self._iface(path, "org.bluez.Device1")
+        await (dev.ConnectProfile(profile) if profile else dev.Connect())
+        if profile == A2DP_SINK:
+            self._streaming(path)
 
     async def disconnect(self, path):
         await (await self._iface(path, "org.bluez.Device1")).Disconnect()
@@ -188,6 +235,7 @@ class FakeBackend(Backend):
             ("Galaxy Buds2", "audio-headset", False),
             ("JBL Flip 6", "audio-card", False),
             ("iPhone", "phone", False),
+            ("AA-BB-CC-DD-EE-05", "", False),
         ]
         for i, (name, icon, paired) in enumerate(seeds):
             path = f"/org/bluez/hci0/dev_{i:02X}"
@@ -212,7 +260,7 @@ class FakeBackend(Backend):
         if not on:
             for path, dev in list(self.devices.items()):
                 if dev.connected:
-                    await self._change(path, 0, connected=False)
+                    await self._change(path, 0, connected=False, transport=False)
         self._emit("adapter")
 
     async def discover(self, on):
@@ -227,20 +275,24 @@ class FakeBackend(Backend):
     async def trust(self, path):
         await self._change(path, 0, trusted=True)
 
-    async def connect(self, path):
-        await self._change(path, 0.8, connected=True)
+    async def connect(self, path, profile=None):
+        await self._change(path, 0.8, connected=True, paired=True, transport=bool(profile))
 
     async def disconnect(self, path):
-        await self._change(path, 0.3, connected=False)
+        await self._change(path, 0.3, connected=False, transport=False)
 
     async def remove(self, path):
         old = self.devices[path]
-        self.devices[path] = dataclasses.replace(old, paired=False, trusted=False, connected=False)
+        self.devices[path] = dataclasses.replace(old, paired=False, trusted=False, connected=False,
+                                                 transport=False)
         self._emit("changed", self.devices[path], old)
 
 
 class Bluetooth:
     DISCOVERY_SECONDS = 45
+    ATTEMPTS = 3
+    RETRY_DELAY = 1.0
+    STREAM_WAIT = 4.0
 
     def __init__(self, backend, state, settings, t, events, system):
         self.backend = backend
@@ -250,6 +302,7 @@ class Bluetooth:
         self.events = events
         self.system = system
         self.busy = set()
+        self._said = {}
         self._discovery_stop = None
         self._adapter_seen = None
 
@@ -265,28 +318,40 @@ class Bluetooth:
             return changed
         if kind == "changed" and device and old:
             return any(getattr(device, f) != getattr(old, f)
-                       for f in ("name", "paired", "trusted", "connected", "icon"))
+                       for f in ("name", "paired", "trusted", "connected", "icon", "uuids", "transport"))
         return True
 
     def _on_backend(self, kind, device, old):
         if not self._relevant(kind, device, old):
             return
-        if kind == "changed" and device and old and old.connected != device.connected:
-            if device.connected:
-                self.settings.remember_bluetooth(device.address, device.name)
-                self.events.toast(self.t("bt_connected", name=device.name), "bluetooth")
-            else:
-                self.events.toast(self.t("bt_disconnected", name=device.name), "bluetooth")
-                if device.is_audio:
-                    self.events.audio_device_lost(device)
-            if device.is_audio and device.connected:
-                self.events.audio_device_found(device)
+        if kind == "removed" and old:
+            self._said.pop(old.path, None)
+        elif kind == "changed" and device and old is None:
+            self._said[device.path] = device.ready
+        elif kind == "changed" and device and old.ready != device.ready:
+            log.info("%s (%s) %s", device.name, device.address, "is ready" if device.ready else "is gone")
+            if device.path not in self.busy:
+                self._announce(device)
+            if device.is_audio:
+                (self.events.audio_device_found if device.ready else self.events.audio_device_lost)(device)
+                if device.ready and self.discovering:
+                    self.end_discovery()
         self._publish()
         self.events.page_changed("/settings/bluetooth", "/control", "/settings")
 
+    def _announce(self, device):
+        """Say that a device connected or went away, once per change. What a link does while
+        aleph is still pairing or connecting is not news; the outcome is."""
+        if self._said.get(device.path, False) == device.ready:
+            return
+        self._said[device.path] = device.ready
+        if device.ready:
+            self.settings.remember_bluetooth(device.address, device.name)
+        self.events.toast(self.t("bt_connected" if device.ready else "bt_disconnected", name=device.name),
+                          "bluetooth")
+
     def _publish(self):
-        audio = next((d.name for d in self.backend.devices.values()
-                      if d.connected and d.is_audio), None)
+        audio = next((d.name for d in self.backend.devices.values() if d.ready and d.is_audio), None)
         self.state.update("bluetooth", enabled=self.backend.powered, audio=audio,
                           discovering=self.backend.discovering)
 
@@ -294,14 +359,25 @@ class Bluetooth:
     def enabled(self):
         return self.backend.powered
 
+    @property
+    def discovering(self):
+        return self.backend.discovering or self._discovery_stop is not None
+
+    def _mine(self, dev):
+        return dev.paired or dev.ready
+
     def my_devices(self):
-        devs = [d for d in self.backend.devices.values() if d.paired]
-        return sorted(devs, key=lambda d: (not d.connected, not d.is_audio, d.name.casefold()))
+        devs = [d for d in self.backend.devices.values() if self._mine(d)]
+        return sorted(devs, key=lambda d: (not d.ready, not d.is_audio, d.name.casefold()))
 
     def other_devices(self):
+        """What is worth pairing nearby: headphones, speakers and controllers that gave a name."""
         devs = [d for d in self.backend.devices.values()
-                if not d.paired and d.name and d.name != d.address]
+                if not self._mine(d) and d.named and d.kind != "other"]
         return sorted(devs, key=lambda d: -(d.rssi if d.rssi is not None else -200))
+
+    def _listening(self):
+        return any(d.ready and d.is_audio for d in self.backend.devices.values())
 
     def recent_audio(self):
         known = {d.address: d for d in self.backend.devices.values() if d.paired}
@@ -338,58 +414,120 @@ class Bluetooth:
             await asyncio.sleep(0.5)
 
     def begin_discovery(self):
-        if not self.backend.powered:
+        """Look for new devices while the Bluetooth page is open, though not while a device is
+        being connected or headphones are in use: an inquiry takes the radio away from both."""
+        if not self.backend.powered or self.busy or self._listening():
             return
         if not self.backend.discovering:
             spawn(self.backend.discover(True))
         if self._discovery_stop:
             self._discovery_stop.cancel()
-        self._discovery_stop = asyncio.get_running_loop().call_later(
-            self.DISCOVERY_SECONDS, lambda: spawn(self.backend.discover(False)))
+        self._discovery_stop = asyncio.get_running_loop().call_later(self.DISCOVERY_SECONDS, self.end_discovery)
 
     def end_discovery(self):
+        spawn(self._stop_discovery())
+
+    async def _stop_discovery(self):
         if self._discovery_stop:
             self._discovery_stop.cancel()
             self._discovery_stop = None
-        spawn(self.backend.discover(False))
+        await self.backend.discover(False)
 
     async def activate(self, path):
+        """One press: connect what is not connected, disconnect what is."""
         dev = self.find(path)
         if not dev or path in self.busy:
             return
         self.busy.add(path)
         self.events.page_changed("/settings/bluetooth", "/control")
+        failed = False
         try:
-            if dev.connected:
+            if dev.ready:
                 await self.backend.disconnect(path)
             else:
-                if not dev.paired:
-                    await self.backend.discover(False)
-                    await self.backend.pair(path)
-                if not self.find(path).trusted:
-                    await self.backend.trust(path)
-                await self._connect_with_retry(path)
+                await self._connect(dev)
         except Exception as e:
-            log.warning("bluetooth action failed: %s", e)
-            self.events.toast(self.t("bt_failed", name=dev.name), "bluetooth")
+            log.warning("%s (%s): %s", dev.name, dev.address, e)
+            failed = True
         finally:
             self.busy.discard(path)
-            self.events.page_changed("/settings/bluetooth", "/control")
+        now = self.find(path)
+        if failed:
+            self.events.toast(self.t("bt_failed", name=dev.name), "bluetooth")
+            if now and not dev.paired and not self._mine(now):
+                await self._discard(path)
+        elif now:
+            self._announce(now)
+        self.events.page_changed("/settings/bluetooth", "/control")
 
-    async def _connect_with_retry(self, path, attempts=3):
-        for attempt in range(attempts):
+    async def _discard(self, path):
+        """A first attempt that failed leaves BlueZ a half-made device, with keys the other side
+        may not hold. Without it the next attempt starts clean, from a new inquiry."""
+        try:
+            await self.backend.remove(path)
+        except Exception as e:
+            log.info("discarding %s: %s", path, e)
+
+    async def _connect(self, dev):
+        path = dev.path
+        log.info("connecting %s (%s), %s", dev.name, dev.address, "known" if dev.paired else "new")
+        if self.discovering:
+            await self._stop_discovery()
+        if dev.is_audio:
+            if not dev.trusted:
+                await self.backend.trust(path)
+            await self._retry(lambda: self._connect_audio(path))
+        else:
+            if not dev.paired:
+                await self.backend.pair(path)
+            now = self.find(path)
+            if now and not now.trusted:
+                await self.backend.trust(path)
+            await self._retry(lambda: self.backend.connect(path))
+
+    async def _connect_audio(self, path):
+        """Headphones are reached by their A2DP service: that connection is always classic
+        Bluetooth, whatever BlueZ learnt of the device over LE, and it pairs new ones on the way."""
+        try:
+            await self.backend.connect(path, A2DP_SINK)
+        except Exception as e:
+            # Headphones that connected by themselves leave BlueZ nothing to connect.
+            if not any(word in str(e) for word in ("unavailable", "NotAvailable", "InProgress", "busy")):
+                raise
+            if not await self._stream(path, self.STREAM_WAIT):
+                raise
+            return
+        if not await self._stream(path, 0):
+            raise ConnectionError("the link went away as soon as it was up")
+
+    async def _stream(self, path, wait):
+        deadline = asyncio.get_running_loop().time() + wait
+        while True:
+            dev = self.find(path)
+            if dev and dev.ready:
+                return True
+            if asyncio.get_running_loop().time() >= deadline:
+                return False
+            await asyncio.sleep(0.1)
+
+    async def _retry(self, connect):
+        for attempt in range(self.ATTEMPTS):
             try:
-                await self.backend.connect(path)
+                await connect()
                 return
-            except Exception:
-                if attempt == attempts - 1:
+            except Exception as e:
+                # A device that does not answer is not there; asking again only keeps the user waiting.
+                gone = any(word in str(e) for word in ("page-timeout", "Host is down"))
+                if gone or attempt == self.ATTEMPTS - 1:
                     raise
-                await asyncio.sleep(1.0)
+                log.info("retrying after: %s", e)
+                await asyncio.sleep(self.RETRY_DELAY)
 
     async def forget(self, path):
         dev = self.find(path)
         if not dev:
             return
         await self.backend.remove(path)
+        self._said.pop(path, None)
         self.settings.forget_bluetooth(dev.address)
         self.events.toast(self.t("forgot_device"), "bluetooth")

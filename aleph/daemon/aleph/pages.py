@@ -822,13 +822,15 @@ class Pages:
                 for d in mine:
                     busy = d.path in b.busy
                     items.append(item("d:" + d.path, d.name, "spinner" if busy else "none",
-                                      value=t("connected") if d.connected and not busy else None,
+                                      value=t("connected") if d.ready and not busy else None,
                                       icon=d.kind))
-            items.append({"header": True, "title": t("other_devices"), "spinner": True})
-            for d in b.other_devices():
+            b.begin_discovery()
+            others = b.other_devices()
+            if others or b.discovering:
+                items.append({"header": True, "title": t("other_devices"), "spinner": b.discovering})
+            for d in others:
                 busy = d.path in b.busy
                 items.append(item("d:" + d.path, d.name, "spinner" if busy else "none", icon=d.kind))
-            b.begin_discovery()
         return page(path, t("bluetooth"), items, live=True)
 
     def _limit_label(self):
@@ -956,8 +958,8 @@ class Pages:
                                     "token": self._token(lambda: self._forget_wifi(saved["uuid"]))}}
         if sub == "bluetooth" and key.startswith("d:"):
             dev = self.app.bluetooth.find(key[2:])
-            if dev and dev.paired:
-                options = [{"key": "toggle", "title": t("disconnect") if dev.connected else t("connect")},
+            if dev and dev in self.app.bluetooth.my_devices():
+                options = [{"key": "toggle", "title": t("disconnect") if dev.ready else t("connect")},
                            {"key": "forget", "title": t("forget"), "destructive": True}]
                 return {"sheet": {"title": dev.name, "items": options,
                                   "token": self._token(lambda c: self._device_choice(dev.path, c))}}
@@ -983,7 +985,7 @@ class Pages:
             for d in b.recent_audio():
                 busy = d.path in b.busy
                 items.append(item("d:" + d.path, d.name, "spinner" if busy else "none", icon="audio",
-                                  value=t("connected") if d.connected and not busy else None))
+                                  value=t("connected") if d.ready and not busy else None))
         wifi = self.app.state.get("wifi")
         items += [
             item("bluetooth", t("bluetooth"), value=t("on") if b.enabled else t("off")),

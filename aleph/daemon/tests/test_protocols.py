@@ -1,4 +1,5 @@
 import asyncio
+import dataclasses
 import json
 import os
 import sys
@@ -10,6 +11,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from aleph.audio import Audio, FakeAudio, _sink  # noqa: E402
 from aleph.battery import Battery  # noqa: E402
+from aleph.bluetooth import A2DP_SINK, Backend, Bluetooth, Device, RavelBackend  # noqa: E402
 from aleph.mpd import MPD, filter_expr, quote, records, values  # noqa: E402
 from aleph.music import Music  # noqa: E402
 from aleph.pages import BOOK_EXTS, folder_listing  # noqa: E402
@@ -703,6 +705,227 @@ class RadioTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((s["name"], s["url"], s["bitrate"], s["codec"]), ("Jazz", "http://j", 0, ""))
         hls = station_from_api({"stationuuid": "y", "url_resolved": "https://x/playlist.m3u8", "hls": 1})
         self.assertEqual(hls["url"], "hls+https://x/playlist.m3u8")
+
+
+class Bluez(Backend):
+    """BlueZ as far as aleph can tell. A link comes up before anything else does, a first
+    connection pairs on the way, and for headphones the stream shows last."""
+
+    def __init__(self, *devices):
+        super().__init__()
+        self.powered = True
+        self.calls = []
+        self.errors = {}
+        self.already = set()
+        self.drops = set()
+        self.devices = {d.path: d for d in devices}
+
+    async def start(self, listener):
+        self.listener = listener
+        for dev in self.devices.values():
+            self._emit("changed", dev, None)
+
+    def set(self, path, **fields):
+        old = self.devices[path]
+        self.devices[path] = dataclasses.replace(old, **fields)
+        self._emit("changed", self.devices[path], old)
+
+    def _fail(self, method):
+        if self.errors.get(method):
+            raise RuntimeError(self.errors[method].pop(0))
+
+    async def discover(self, on):
+        self.calls.append(("discover", on))
+        self.discovering = on
+        self._emit("adapter")
+
+    async def pair(self, path):
+        self.calls.append(("pair", path))
+        self.set(path, connected=True)
+        try:
+            self._fail("pair")
+        except RuntimeError:
+            self.set(path, connected=False)
+            raise
+        self.set(path, paired=True)
+
+    async def trust(self, path):
+        self.calls.append(("trust", path))
+        self.set(path, trusted=True)
+
+    async def connect(self, path, profile=None):
+        self.calls.append(("connect", path, profile))
+        if path in self.already:
+            self.set(path, connected=True, paired=True, transport=True)
+            raise RuntimeError("org.bluez.Error.NotAvailable -- br-connection-profile-unavailable")
+        self.set(path, connected=True)
+        try:
+            self._fail("connect")
+        except RuntimeError:
+            self.set(path, connected=False)
+            raise
+        self.set(path, paired=True, transport=bool(profile))
+        if path in self.drops:
+            self.set(path, connected=False, transport=False)
+
+    async def disconnect(self, path):
+        self.calls.append(("disconnect", path))
+        self.set(path, connected=False, transport=False)
+
+    async def remove(self, path):
+        self.calls.append(("remove", path))
+        self._emit("removed", None, self.devices.pop(path))
+
+
+class BluetoothEvents:
+    def __init__(self):
+        self.toasts, self.found, self.lost = [], [], []
+
+    def toast(self, text, icon=None):
+        self.toasts.append(text)
+
+    def page_changed(self, *paths):
+        pass
+
+    def audio_device_found(self, device):
+        self.found.append(device.name)
+
+    def audio_device_lost(self, device):
+        self.lost.append(device.name)
+
+
+PODS, PAD = "/org/bluez/hci0/dev_AC", "/org/bluez/hci0/dev_E4"
+
+
+class BluetoothTest(unittest.IsolatedAsyncioTestCase):
+    """Pairing and connecting as BlueZ plays them out, AirPods first."""
+
+    async def asyncSetUp(self):
+        self.bluez = Bluez(
+            Device(PODS, "AC:12:2F:00:00:01", "AirPods Pro", "audio-headphones", rssi=-48),
+            Device(PAD, "E4:17:D8:00:00:02", "8BitDo Pro 2", "input-gaming", rssi=-60),
+            Device("/org/bluez/hci0/dev_F0", "F0:99:B6:00:00:03", "iPhone", "phone", rssi=-40),
+            Device("/org/bluez/hci0/dev_5C", "5C:F3:70:00:00:04", "5C-F3-70-00-00-04", "audio-card", rssi=-30))
+        self.events = BluetoothEvents()
+        self.settings = Settings(tempfile.mkdtemp())
+        self.bt = Bluetooth(self.bluez, State(lambda snapshot: None), self.settings, Translator("ko"),
+                            self.events, None)
+        self.bt.RETRY_DELAY, self.bt.STREAM_WAIT = 0, 0.05
+        await self.bt.start()
+
+    def connects(self):
+        return [c for c in self.bluez.calls if c[0] == "connect"]
+
+    async def test_only_named_headphones_and_controllers_are_offered(self):
+        self.assertEqual([d.name for d in self.bt.other_devices()], ["AirPods Pro", "8BitDo Pro 2"])
+        self.assertEqual(self.bt.my_devices(), [])
+
+    async def test_headphones_connect_by_their_audio_service_and_say_so_once(self):
+        await self.bt.activate(PODS)
+        self.assertEqual(self.bluez.calls, [("trust", PODS), ("connect", PODS, A2DP_SINK)])
+        self.assertEqual(self.events.toasts, ["AirPods Pro 연결됨"])
+        self.assertEqual(self.events.found, ["AirPods Pro"])
+        self.assertEqual([d.name for d in self.bt.my_devices()], ["AirPods Pro"])
+        self.assertEqual(self.settings["recent_bluetooth"][0]["address"], "AC:12:2F:00:00:01")
+
+    async def test_a_link_without_sound_is_not_a_connection(self):
+        self.bluez.set(PODS, connected=True, paired=True)
+        self.assertEqual((self.events.toasts, self.events.found), ([], []))
+        self.assertFalse(self.bt.find(PODS).ready)
+        await self.bt.activate(PODS)
+        self.assertEqual(self.connects(), [("connect", PODS, A2DP_SINK)], "a press connects; it does not hang up")
+        self.assertTrue(self.bt.find(PODS).ready)
+
+    async def test_a_failed_first_attempt_says_so_once_and_leaves_nothing_behind(self):
+        self.bluez.errors["connect"] = ["org.bluez.Error.Failed -- br-connection-refused"] * 3
+        await self.bt.activate(PODS)
+        self.assertEqual(self.events.toasts, ["AirPods Pro에 연결할 수 없어요"])
+        self.assertEqual(len(self.connects()), 3)
+        self.assertEqual(self.bluez.calls[-1], ("remove", PODS))
+        self.assertEqual(self.events.found, [])
+
+    async def test_headphones_that_do_not_answer_are_not_asked_again(self):
+        self.bluez.set(PODS, paired=True, trusted=True)
+        self.bluez.errors["connect"] = ["org.bluez.Error.Failed -- br-connection-page-timeout"]
+        await self.bt.activate(PODS)
+        self.assertEqual(len(self.connects()), 1)
+        self.assertEqual(self.events.toasts, ["AirPods Pro에 연결할 수 없어요"])
+        self.assertIn(PODS, self.bluez.devices, "a device that was paired stays")
+
+    async def test_a_link_that_drops_at_once_is_a_failure_said_once(self):
+        self.bluez.drops.add(PODS)
+        await self.bt.activate(PODS)
+        self.assertEqual(len(self.connects()), 3)
+        self.assertEqual(self.events.toasts, ["AirPods Pro에 연결할 수 없어요"])
+        self.assertIn(PODS, self.bluez.devices, "it did pair, so it stays to be tried again")
+
+    async def test_headphones_that_connected_by_themselves_count(self):
+        self.bluez.set(PODS, paired=True, trusted=True)
+        self.bluez.already.add(PODS)
+        await self.bt.activate(PODS)
+        self.assertEqual(len(self.connects()), 1)
+        self.assertEqual(self.events.toasts, ["AirPods Pro 연결됨"])
+
+    async def test_controllers_pair_first_and_connect_whole(self):
+        await self.bt.activate(PAD)
+        self.assertEqual(self.bluez.calls, [("pair", PAD), ("trust", PAD), ("connect", PAD, None)])
+        self.assertEqual(self.events.toasts, ["8BitDo Pro 2 연결됨"])
+
+    async def test_a_press_on_connected_headphones_hangs_up(self):
+        await self.bt.activate(PODS)
+        await self.bt.activate(PODS)
+        self.assertEqual(self.bluez.calls[-1], ("disconnect", PODS))
+        self.assertEqual(self.events.toasts, ["AirPods Pro 연결됨", "AirPods Pro 연결 끊김"])
+        self.assertEqual(self.events.lost, ["AirPods Pro"])
+
+    async def test_headphones_that_go_away_are_announced_and_reported(self):
+        await self.bt.activate(PODS)
+        self.bluez.set(PODS, connected=False, transport=False)
+        self.assertEqual(self.events.toasts, ["AirPods Pro 연결됨", "AirPods Pro 연결 끊김"])
+        self.assertEqual(self.events.lost, ["AirPods Pro"])
+
+    async def test_no_inquiry_while_headphones_play(self):
+        self.bt.begin_discovery()
+        await asyncio.sleep(0.01)
+        self.assertTrue(self.bt.discovering)
+        await self.bt.activate(PODS)
+        self.assertEqual(self.bluez.calls[:2], [("discover", True), ("discover", False)])
+        self.bt.begin_discovery()
+        await asyncio.sleep(0.01)
+        self.assertFalse(self.bt.discovering)
+        self.assertEqual(self.bluez.calls.count(("discover", True)), 1)
+
+    async def test_no_inquiry_while_a_device_is_being_connected(self):
+        self.events.page_changed = lambda *paths: self.bt.begin_discovery()  # the open page, redrawn
+        self.bt.begin_discovery()
+        await asyncio.sleep(0.01)
+        await self.bt.activate(PAD)
+        self.assertEqual(self.bluez.calls[:5], [("discover", True), ("discover", False), ("pair", PAD),
+                                                ("trust", PAD), ("connect", PAD, None)])
+        await asyncio.sleep(0.01)
+        self.assertEqual(self.bluez.calls[5:], [("discover", True)], "it looks again once that is done")
+
+
+class BluezSignalsTest(unittest.TestCase):
+    def test_headphones_are_ready_once_a_stream_is_set_up(self):
+        bluez, dev = RavelBackend(), "/org/bluez/hci0/dev_AC_12_2F_00_00_01"
+        bluez._apply(dev, {"org.bluez.Device1": {"Address": "AC:12:2F:00:00:01", "Alias": "AirPods Pro",
+                                                 "Icon": "audio-headphones", "Connected": True}})
+        self.assertFalse(bluez.devices[dev].ready, "a link alone, as pairing or LE makes one")
+        bluez._apply(dev + "/sep1/fd0", {"org.bluez.MediaTransport1": {"Device": dev}})
+        self.assertTrue(bluez.devices[dev].ready)
+        bluez._apply(dev, {"org.bluez.Device1": {"RSSI": -50}})
+        self.assertTrue(bluez.devices[dev].ready, "it lasts while the link does")
+        bluez._apply(dev, {"org.bluez.Device1": {"Connected": False}})
+        bluez._apply(dev, {"org.bluez.Device1": {"Connected": True}})
+        self.assertFalse(bluez.devices[dev].ready, "a new link starts without a stream")
+
+    def test_a_device_without_a_name_shows_its_address(self):
+        bluez, dev = RavelBackend(), "/org/bluez/hci0/dev_5C_F3_70_00_00_04"
+        bluez._apply(dev, {"org.bluez.Device1": {"Address": "5C:F3:70:00:00:04", "Alias": "5C-F3-70-00-00-04"}})
+        self.assertFalse(bluez.devices[dev].named)
+        bluez._apply(dev, {"org.bluez.Device1": {"Alias": "JBL Flip 6"}})
+        self.assertTrue(bluez.devices[dev].named)
 
 
 if __name__ == "__main__":
