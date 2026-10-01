@@ -43,6 +43,14 @@ def empty(icon, title, text=None):
     return {"icon": icon, "title": title, "text": text}
 
 
+def _when(stamp):
+    """A time of day for today, the date before it for older days."""
+    if not stamp:
+        return None
+    then = datetime.datetime.fromtimestamp(stamp)
+    return f"{then:%H:%M}" if then.date() == datetime.date.today() else f"{then.month}/{then.day} {then:%H:%M}"
+
+
 def _strip_ext(name, exts):
     lower = name.lower()
     ext = max((e for e in exts if lower.endswith(e)), key=len, default="")
@@ -405,6 +413,10 @@ class Pages:
                 return {"none": True}
             fav = self.app.radio.is_favorite(station["uuid"])
             options = [{"key": "fav", "title": t("remove_favorite") if fav else t("add_favorite")}, timer]
+            on_air = self.app.songs.on_air
+            if on_air:
+                kept = (self.app.songs.find(on_air[0]) or {}).get("saved")
+                options.insert(0, {"key": "song", "title": t("unsave_song") if kept else t("save_song")})
         else:
             repeat = (t("repeat_one") if player["single"] else t("on")) if player["repeat"] else None
             options = [
@@ -421,6 +433,9 @@ class Pages:
             if choice == "fav" and m.station:
                 added = self.app.radio.toggle_favorite(m.station)
                 self.app.toast(t("added_favorite") if added else t("removed_favorite"), "star")
+            elif choice == "song":
+                self.app.songs.set_saved(on_air[0], not kept, on_air[1])
+                self.app.toast(t("song_unsaved") if kept else t("song_saved"), "star")
             elif choice == "shuffle":
                 await m.set_shuffle(not player["shuffle"])
             elif choice == "repeat":
@@ -464,6 +479,17 @@ class Pages:
     def _icon_path(self, station):
         return self.app.radio.cached_icon(station)
 
+    def _heard_items(self):
+        songs = self.app.songs
+        items = []
+        for title, entries in ((self.t("saved_songs"), songs.saved()), (self.t("heard_songs"), songs.recent())):
+            if entries:
+                items.append(header(title))
+                items += [item("g:" + e["title"], e["title"], "star" if e["saved"] else "none",
+                               subtitle=" · ".join(filter(None, (e.get("station"), _when(e.get("time"))))))
+                          for e in entries]
+        return items
+
     def _prefetch_icons(self, path, stations):
         missing = [s for s in stations[:40] if s.get("favicon") and not self._icon_path(s)]
         if not missing or ("icons", path) in self._art_jobs:
@@ -483,7 +509,7 @@ class Pages:
         t = self.t
         r = self.app.radio
         if not rest:
-            items = [item("favorites", t("favorites")),
+            items = [item("favorites", t("favorites")), item("songs", t("song_log")),
                      item("top", t("top_stations")), item("country/KR", t("korea")),
                      item("countries", t("by_country")), item("search", t("search"))]
             return page(path, t("radio"), items)
@@ -494,6 +520,9 @@ class Pages:
                 items = self._station_items(path, list(r.favorites))
                 return page(path, t("favorites"), items, rows="art", live=True,
                             empty=empty("star", t("no_favorites_title"), t("no_favorites_text")))
+            if kind == "songs":
+                return page(path, t("song_log"), self._heard_items(), rows="tall", live=True,
+                            empty=empty("music", t("no_songs_title"), t("no_songs_text")))
             if kind == "top":
                 return page(path, t("top_stations"), self._station_items(path, await r.top()),
                             rows="art", empty=net_error)
@@ -520,6 +549,12 @@ class Pages:
         if rest[0] == "countries":
             _, code, name = key.split(":", 2)
             return {"push": "/radio/country/" + enc(code, name)}
+        if rest[0] == "songs":
+            entry = self.app.songs.find(key[2:])
+            if entry:
+                self.app.songs.set_saved(entry["title"], not entry["saved"])
+                self.app.toast(self.t("song_saved" if entry["saved"] else "song_unsaved"), "star")
+            return {"reload": True}
         stations = self._stations.get(path) or []
         if key.startswith("st") and int(key[2:]) < len(stations):
             station = dict(stations[int(key[2:])])
@@ -527,6 +562,10 @@ class Pages:
             await self.app.music.play_stream(station)
             self.app.radio.report_click(station)
             return {"nowplaying": True}
+
+    def _delete_song(self, title):
+        self.app.songs.remove(title)
+        return {"reload": True}
 
     def _music_search(self, text):
         text = (text or "").strip()
@@ -537,6 +576,13 @@ class Pages:
         return {"push": "/radio/search/" + enc(text)} if text else {"none": True}
 
     async def _alt_radio(self, path, rest, key):
+        if rest and rest[0] == "songs":
+            entry = self.app.songs.find(key[2:])
+            if not entry:
+                return None
+            title = entry["title"]
+            return {"confirm": {"title": self.t("delete_song_q", name=title), "ok": self.t("delete"),
+                                "destructive": True, "token": self._token(lambda: self._delete_song(title))}}
         stations = self._stations.get(path) or []
         if key.startswith("st") and int(key[2:]) < len(stations):
             added = self.app.radio.toggle_favorite(stations[int(key[2:])])

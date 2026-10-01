@@ -14,7 +14,7 @@ from .mpd import MPD
 from .music import Music
 from .pages import BOOK_EXTS, VIDEO_EXTS, Pages
 from .power import Power
-from .radio import Radio
+from .radio import Radio, SongLog
 from .settings import Settings
 from .state import State
 from .system import System
@@ -44,6 +44,8 @@ class App:
                            music_dir=args.music)
         self.music.song_changed = lambda: self.page_changed("/nowplaying/lyrics")
         self.radio = Radio(args.config, args.cache)
+        self.songs = SongLog(args.config, changed=lambda: self.page_changed("/radio/songs"))
+        self.music.on_air = self.songs.playing
         self.bluetooth = Bluetooth(FakeBackend() if self.sim else RavelBackend(),
                                    self.state, self.settings, self.t, self, self.system)
         self.wifi = Wifi(FakeWifi() if self.sim else Nmcli(), self.state, self.t, self)

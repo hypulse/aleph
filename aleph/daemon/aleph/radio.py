@@ -158,6 +158,85 @@ class Radio:
         return path
 
 
+class SongLog:
+    """What the radio has played, newest first, so that a song can be looked up later. A title
+    counts once it has been on for a while, which leaves out the stations only passed through.
+    Songs the listener saved stay; the rest roll off."""
+
+    DWELL = 10.0
+    RECENT = 100
+
+    def __init__(self, config_dir, changed=None, clock=time.time):
+        self.path = os.path.join(config_dir, "radio-songs.json")
+        self.entries = load_json(self.path, [])
+        self.changed = changed or (lambda: None)
+        self.on_air = None
+        self._clock = clock
+        self._timer = None
+
+    def playing(self, title, station):
+        """Told what the station gives as its song, or nothing while it gives none."""
+        title = " ".join((title or "").split())
+        now = (title, station) if title and title.casefold() != (station or "").casefold() else None
+        if now == self.on_air:
+            return
+        self.on_air = now
+        if self._timer:
+            self._timer.cancel()
+            self._timer = None
+        if now:
+            self._timer = asyncio.get_running_loop().call_later(self.DWELL, self._heard, now)
+
+    def _heard(self, song):
+        self._timer = None
+        self._put(*song)
+
+    def find(self, title):
+        key = title.casefold()
+        return next((e for e in self.entries if e["title"].casefold() == key), None)
+
+    def saved(self):
+        return [e for e in self.entries if e["saved"]]
+
+    def recent(self):
+        return [e for e in self.entries if not e["saved"]]
+
+    def set_saved(self, title, saved, station=""):
+        entry = self.find(title)
+        if entry:
+            entry["saved"] = saved
+            self._store()
+        elif saved:
+            self._put(title, station, saved=True)
+
+    def remove(self, title):
+        entry = self.find(title)
+        if entry:
+            self.entries.remove(entry)
+            self._store()
+
+    def _put(self, title, station, saved=False):
+        """A station plays its songs again: one heard before moves back to the top."""
+        entry = self.find(title)
+        if entry:
+            self.entries.remove(entry)
+        else:
+            entry = {"title": title, "saved": False}
+        entry.update(station=station, time=int(self._clock()), saved=entry["saved"] or saved)
+        self.entries.insert(0, entry)
+        self._store()
+
+    def _store(self):
+        kept, room = [], self.RECENT
+        for entry in self.entries:
+            if entry["saved"] or room:
+                kept.append(entry)
+                room -= not entry["saved"]
+        self.entries = kept
+        save_json(self.path, self.entries)
+        self.changed()
+
+
 def _looks_like_image(data):
     return (data[:3] == b"\xff\xd8\xff" or data[:8] == b"\x89PNG\r\n\x1a\n"
             or data[:4] in (b"GIF8", b"\x00\x00\x01\x00") or data[:4] == b"RIFF")

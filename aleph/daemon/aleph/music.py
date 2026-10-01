@@ -54,6 +54,7 @@ class Music:
         self.music_dir = music_dir
         self.art_dir = os.path.join(cache_dir, "art")
         self.song_changed = lambda: None
+        self.on_air = lambda title, station: None
         self.notify = notify or (lambda text, icon=None: None)
         self.songs = []
         self.updating = False
@@ -137,6 +138,7 @@ class Music:
             if uri and info["art"] is None and self._art_key(uri) not in self._no_art:
                 spawn(self._fetch_art(uri))
         self.state.update("player", **info)
+        self.on_air(info["artist"] if radio and info["state"] == "play" else "", info["title"])
 
     def _live_elapsed(self, snap):
         player = snap["player"]

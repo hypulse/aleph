@@ -24,7 +24,7 @@ from aleph.lyrics import parse_lrc  # noqa: E402
 from aleph.power import Power  # noqa: E402
 from aleph.settings import Settings  # noqa: E402
 from aleph.state import State  # noqa: E402
-from aleph.radio import Radio, station_from_api  # noqa: E402
+from aleph.radio import Radio, SongLog, station_from_api  # noqa: E402
 from aleph.transfer import Transfer, safe_parts  # noqa: E402
 from aleph.util import enc, fmt_duration, index_letter, matches, sort_key, spawn, split_path  # noqa: E402
 from aleph.wifi import parse_terse  # noqa: E402
@@ -705,6 +705,109 @@ class RadioTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((s["name"], s["url"], s["bitrate"], s["codec"]), ("Jazz", "http://j", 0, ""))
         hls = station_from_api({"stationuuid": "y", "url_resolved": "https://x/playlist.m3u8", "hls": 1})
         self.assertEqual(hls["url"], "hls+https://x/playlist.m3u8")
+
+
+class OneSong:
+    """MPD with one thing in its queue."""
+
+    def __init__(self, state, **song):
+        self.status = [("state", state), ("audio", "44100:16:2"), ("song", "0"), ("playlistlength", "1")]
+        self.song = list(song.items())
+
+    async def call(self, command, *args):
+        return self.status if command == "status" else self.song
+
+    async def picture(self, uri):
+        return None
+
+
+class SongLogTest(unittest.IsolatedAsyncioTestCase):
+    """The radio's song history: what counts as heard, and what stays."""
+
+    async def asyncSetUp(self):
+        self.dir = tempfile.mkdtemp()
+        self.now = 1000
+
+    def log(self, recent=3):
+        log = SongLog(self.dir, clock=lambda: self.now)
+        log.DWELL, log.RECENT = 0.02, recent
+        return log
+
+    async def hear(self, log, title, station="Night FM"):
+        self.now += 60
+        log.playing(title, station)
+        await asyncio.sleep(0.05)
+
+    async def test_a_song_counts_once_it_has_played_a_while(self):
+        log = self.log()
+        log.playing("Aurora Lane -  Neon Coast ", "Night FM")
+        self.assertEqual(log.entries, [], "not at once: stations get passed through")
+        await asyncio.sleep(0.05)
+        self.assertEqual(log.entries, [{"title": "Aurora Lane - Neon Coast", "station": "Night FM",
+                                        "time": 1000, "saved": False}])
+
+    async def test_a_station_passed_through_leaves_nothing(self):
+        log = self.log()
+        log.playing("Song A", "One")
+        log.playing("Song B", "Two")
+        log.playing("", "Two")
+        await asyncio.sleep(0.05)
+        self.assertEqual(log.entries, [])
+
+    async def test_a_station_naming_itself_is_not_a_song(self):
+        log = self.log()
+        await self.hear(log, "NIGHT FM")
+        await self.hear(log, "   ")
+        self.assertEqual(log.entries, [])
+        self.assertIsNone(log.on_air)
+
+    async def test_a_song_heard_again_moves_to_the_top(self):
+        log = self.log()
+        for title in ("Song A", "Song B", "song a"):
+            await self.hear(log, title, "Two" if title == "song a" else "One")
+        self.assertEqual([(e["title"], e["station"], e["time"]) for e in log.entries],
+                         [("Song A", "Two", 1180), ("Song B", "One", 1120)])
+
+    async def test_saved_songs_stay_when_the_rest_roll_off(self):
+        log = self.log(recent=2)
+        await self.hear(log, "Keeper")
+        log.set_saved("Keeper", True)
+        for title in ("One", "Two", "Three"):
+            await self.hear(log, title)
+        self.assertEqual([e["title"] for e in log.saved()], ["Keeper"])
+        self.assertEqual([e["title"] for e in log.recent()], ["Three", "Two"])
+        await self.hear(log, "Keeper")
+        self.assertTrue(log.find("keeper")["saved"], "hearing it again does not unsave it")
+        log.set_saved("Keeper", False)
+        self.assertEqual([e["title"] for e in log.recent()], ["Keeper", "Three"])
+
+    async def test_saving_what_is_on_air_does_not_wait(self):
+        log = self.log()
+        log.DWELL = 60
+        log.playing("Just Started", "Night FM")
+        log.set_saved(log.on_air[0], True, log.on_air[1])
+        self.assertEqual([(e["title"], e["station"], e["saved"]) for e in log.entries],
+                         [("Just Started", "Night FM", True)])
+        log.playing("", "")
+
+    async def test_it_outlives_a_restart_and_can_be_cleared(self):
+        log = self.log()
+        await self.hear(log, "Song A")
+        log.set_saved("Song A", True)
+        again = self.log()
+        self.assertEqual([(e["title"], e["saved"]) for e in again.entries], [("Song A", True)])
+        again.remove("song a")
+        self.assertEqual(self.log().entries, [])
+
+    async def test_only_a_playing_station_is_on_air(self):
+        said = []
+        stream = {"file": "http://night.fm/live", "Name": "Night FM", "Title": "Aurora Lane - Neon Coast"}
+        for state, song in (("play", stream), ("pause", stream),
+                            ("play", {"file": "a/1.mp3", "Title": "Local", "Artist": "Someone"})):
+            music = Music(OneSong(state, **song), State(lambda snapshot: None), None, self.dir)
+            music.on_air = lambda title, station: said.append((title, station))
+            await music.refresh()
+        self.assertEqual(said, [("Aurora Lane - Neon Coast", "Night FM"), ("", "Night FM"), ("", "Local")])
 
 
 class Bluez(Backend):
